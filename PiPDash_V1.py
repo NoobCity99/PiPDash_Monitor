@@ -117,39 +117,46 @@ def glow_text(surface, font, text, pos, color=GREEN, glow=DIM_GREEN, offset=1):
     surface.blit(surf_g, (x + offset, y + offset))
     surface.blit(font.render(text, True, color), pos)
 
+try:
+    import win32evtlogutil  # type: ignore
+except Exception:  # pragma: no cover - only on Windows
+    win32evtlogutil = None
+
 # ----------------------------
 # Windows System Log Tailer (pywin32)
 # ----------------------------
 EVENT_TYPES = {
-    1: "CRITICAL",
-    2: "ERROR",
-    3: "WARNING",
+    1: "ERROR",
+    2: "WARNING",
     4: "INFO",
     8: "AUDIT_SUCCESS",
     16: "AUDIT_FAILURE",
 }
 
-# Five categories to include from the System log
-# (broad regexes covering common source names)
-EVENT_SOURCE_PATTERNS = [
-    r"^Kernel-Power$",                 # unexpected shutdowns
-    r"^(Disk|Ntfs)$",                  # storage issues
-    r"^WHEA-Logger$",                  # corrected hardware errors
-    r"^(e1rexpress|Netwtw\w*|rtwlane|rtwlanu|athr|Killer|ndis|rtl\w+)$",  # NIC resets/timeouts
-    r"^Service Control Manager$",      # service failures
-]
+SEVERITY_MAP = {
+    0: "SUCCESS",
+    1: "INFO",
+    2: "WARNING",
+    3: "ERROR",
+}
 
-SOURCE_REGEXES = [re.compile(pat, re.I) for pat in EVENT_SOURCE_PATTERNS]
 
 class SystemLogTail:
     """Tail Windows 'System' log for last hour, keeping newest events first."""
-    def __init__(self, lookback_seconds=3600, max_events=100):
+    def __init__(self, lookback_seconds=3600, max_events=100, source_patterns=None):
         self.lookback_seconds = lookback_seconds
         self.buffer = deque(maxlen=max_events)
         self._last_record = 0
+        self._source_regexes = (
+            [re.compile(pat, re.I) for pat in source_patterns]
+            if source_patterns
+            else None
+        )
 
     def _source_wanted(self, src: str) -> bool:
-        for rx in SOURCE_REGEXES:
+        if not self._source_regexes:
+            return True
+        for rx in self._source_regexes:
             if rx.search(src or ""):
                 return True
         return False
@@ -181,23 +188,38 @@ class SystemLogTail:
                         win32evtlog.CloseEventLog(hlog)
                         return
 
-                    level = EVENT_TYPES.get(ev.EventType, str(ev.EventType))
-                    if level not in ("CRITICAL", "ERROR", "WARNING"):
+                    full_id = getattr(ev, "EventID", 0) or 0
+                    severity = SEVERITY_MAP.get((full_id >> 30) & 0x3, "INFO")
+                    if severity not in ("ERROR", "WARNING"):
                         continue
+
+                    level = severity
+                    if (
+                        severity == "ERROR"
+                        and getattr(ev, "EventType", 0) == 1
+                        and ((full_id >> 30) & 0x3) == 3
+                        and getattr(ev, "EventCategory", 0) == 1
+                    ):
+                        level = "CRITICAL"
 
                     source = getattr(ev, "SourceName", "") or ""
                     if not self._source_wanted(source):
                         continue
 
-                    event_id = getattr(ev, "EventID", 0) & 0xFFFF
-                    # Basic message preview from first string insert (if any)
-                    inserts = getattr(ev, "StringInserts", None)
+                    event_id = full_id & 0xFFFF
                     msg = ""
-                    if inserts:
+                    if win32evtlogutil:
                         try:
-                            msg = " ".join(str(x) for x in inserts if x)[:160]
+                            msg = win32evtlogutil.SafeFormatMessage(ev, logtype)[:160]
                         except Exception:
-                            msg = str(inserts[0])[:160]
+                            msg = ""
+                    if not msg:
+                        inserts = getattr(ev, "StringInserts", None)
+                        if inserts:
+                            try:
+                                msg = " ".join(str(x) for x in inserts if x)[:160]
+                            except Exception:
+                                msg = str(inserts[0])[:160]
 
                     item = {
                         "record": recno,
@@ -224,7 +246,9 @@ class SystemLogTail:
         for e in self.latest(25):
             parts.append(f"[{e['time']}] {e['level']}: {e['source']}({e['event_id']}) — {e['message']}")
         if not parts:
-            return "EVENTS: No recent WARN/ERROR from selected sources in the last hour."
+            return (
+                "EVENTS: No recent warnings, errors, or critical events in the last hour."
+            )
         return "   |   ".join(parts) + "   |   "
 
 # ----------------------------
