@@ -38,6 +38,9 @@ if sys.platform == "win32":
 WIDTH, HEIGHT = 480, 800   # portrait: 480 wide x 800 tall
 FPS = 30
 
+# Throttle CPU sampling to calm the gauge needle
+CPU_SAMPLE_SEC = 0.5
+
 # ----------------------------
 # Pip-Boy vibe (colors & style)
 # ----------------------------
@@ -258,6 +261,8 @@ class RealStats:
     def __init__(self):
         # Prime cpu_percent to get meaningful values without blocking
         psutil.cpu_percent(interval=0.0)
+        self.last_cpu_pct = 0.0
+        self.last_cpu_ts = 0.0
         self.last_net = psutil.net_io_counters(pernic=False)
         self.last_t = time.time()
 
@@ -288,7 +293,11 @@ class RealStats:
         return up_mbps, down_mbps
 
     def snapshot(self):
-        cpu_pct = psutil.cpu_percent(interval=None)
+        now = time.time()
+        if now - self.last_cpu_ts >= CPU_SAMPLE_SEC:
+            self.last_cpu_pct = psutil.cpu_percent(interval=None)
+            self.last_cpu_ts = now
+        cpu_pct = self.last_cpu_pct
         mem = psutil.virtual_memory()
         mem_used_gb = (mem.total - mem.available) / (1024**3)
         mem_total_gb = mem.total / (1024**3)

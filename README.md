@@ -145,7 +145,7 @@ Two simple controls (add/adjust near the top if you want calmer needles):
 ```python
 STATS_INTERVAL = 1.0      # seconds between snapshots (global throttle)
 
-CPU_SAMPLE_SEC = 1.0      # CPU % sampling cadence
+CPU_SAMPLE_SEC = 0.5      # CPU % sampling cadence
 CPU_SMOOTH_ALPHA = 0.35   # EMA smoothing; lower = smoother
 ```
 
