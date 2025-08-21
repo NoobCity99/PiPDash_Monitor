@@ -87,6 +87,15 @@ GRAPH_H = BOT_BAND_H - 18
 GRAPH_POINTS = WIDTH  # one point per x pixel
 
 # ----------------------------
+# Logo sizing and placement
+# ----------------------------
+LOGO_START_MAX = 400        # instructions: max width/height of start screen logo
+LOGO_MAIN_MAX = 250         # instructions: max width/height of in-app logo
+LOGO_START_Y_OFFSET = -140  # instructions: vertical offset from screen center for start logo
+LOGO_MAIN_X_OFFSET = 0      # instructions: horizontal offset for in-app logo
+LOGO_MAIN_Y_OFFSET = -35    # instructions: vertical offset from graph for in-app logo
+
+# ----------------------------
 # Alerts / thresholds
 # ----------------------------
 CPU_HOT_PCT = 95.0
@@ -132,6 +141,14 @@ def load_tinted_logo(path, tint=(0, 255, 70), opacity=220):
     surf.blit(tint_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
     surf.set_alpha(opacity)
     return surf
+
+
+def scale_logo(logo_surf, max_dim):
+    """Scale *logo_surf* to fit within a square of size *max_dim* without distortion."""
+    lw, lh = logo_surf.get_size()
+    scale = min(max_dim / lw, max_dim / lh)
+    new_size = (int(lw * scale), int(lh * scale))
+    return pygame.transform.smoothscale(logo_surf, new_size)
 
 try:
     import win32evtlogutil  # type: ignore
@@ -537,7 +554,7 @@ def start_screen(surface, font_lg, logo):
 
     lw, lh = logo.get_size()
     lx = (WIDTH - lw) // 2
-    ly = 160
+    ly = (HEIGHT - lh) // 2 + LOGO_START_Y_OFFSET  # instructions: tweak LOGO_START_Y_OFFSET to move logo
     surface.blit(logo, (lx, ly))
 
     # START button rectangle in middle
@@ -585,8 +602,8 @@ def main():
 
     logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
     logo = load_tinted_logo(logo_path)
-    logo_start = pygame.transform.smoothscale(logo, (200, 200))
-    logo_main = pygame.transform.smoothscale(logo, (120, 120))
+    logo_start = scale_logo(logo, LOGO_START_MAX)
+    logo_main = scale_logo(logo, LOGO_MAIN_MAX)
 
     # data provider
     provider = DemoStats() if args.demo else RealStats()
@@ -651,8 +668,8 @@ def main():
                      f"{bar_pct:.0f}%")
             y += BAR_H + BAR_GAP
 
-        logo_x = (WIDTH - logo_main.get_width()) // 2
-        logo_y = GRAPH_Y - logo_main.get_height() - 25
+        logo_x = (WIDTH - logo_main.get_width()) // 2 + LOGO_MAIN_X_OFFSET  # instructions: adjust LOGO_MAIN_X_OFFSET to move logo horizontally
+        logo_y = GRAPH_Y - logo_main.get_height() + LOGO_MAIN_Y_OFFSET  # instructions: adjust LOGO_MAIN_Y_OFFSET to move logo vertically
         screen.blit(logo_main, (logo_x, logo_y))
 
         # divider above graph
