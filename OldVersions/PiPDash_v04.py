@@ -55,6 +55,8 @@ FONT_SIZE = 20
 FONT_SIZE_SMALL = 16
 FONT_SIZE_LARGE = 26
 
+LOGO_PATH = os.path.join("vt.png")
+
 # ----------------------------
 # Layout geometry
 # ----------------------------
@@ -93,6 +95,34 @@ RAM_HOT_PCT = 90.0
 # ----------------------------
 # Utility
 # ----------------------------
+
+def load_tinted_logo(path, tint=(0, 255, 70), opacity=220):
+
+    surf = pygame.image.load(path).convert_alpha()
+    # Multiply the RGB by your tint: white stays tint, gray becomes dim green
+    tint_surf = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+    tint_surf.fill((*tint, 255))
+    # Multiply colors; keep alpha from the original
+    surf = surf.copy()
+    surf.blit(tint_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    surf.set_alpha(opacity)
+    return surf
+
+def draw_logo_centered(surface, logo_surf, area_rect, pad=6, allow_upscale=True):
+
+    if logo_surf is None or area_rect.height <= 10 or area_rect.width <= 10:
+        return
+    lw, lh = logo_surf.get_size()
+    max_w = max(1, area_rect.w - 2 * pad)
+    max_h = max(1, area_rect.h - 2 * pad)
+    scale = min(max_w / lw, max_h / lh)
+    if not allow_upscale:
+        scale = min(1.0, scale)
+    new_size = (max(1, int(lw * scale)), max(1, int(lh * scale)))
+    scaled = pygame.transform.smoothscale(logo_surf, new_size)
+    surface.blit(scaled, (area_rect.centerx - scaled.get_width() // 2,
+                          area_rect.centery - scaled.get_height() // 2))
+
 def clamp(x, lo, hi):
     return lo if x < lo else hi if x > hi else x
 
@@ -389,6 +419,8 @@ def draw_bar(surface, x1, y1, x2, y2, pct_val, label, right_text):
     rt_surf = font.render(right_text, True, GREEN)
     surface.blit(rt_surf, (x2 - rt_surf.get_width(), y2 + 6))
 
+    
+
 def draw_graph(surface, x, y, w, h, up_hist, down_hist):
     # frame
     pygame.draw.rect(surface, GREEN, (x, y, w, h), width=1)
@@ -555,6 +587,14 @@ def main():
     # data provider
     provider = DemoStats() if args.demo else RealStats()
 
+    # logo:
+    try:
+        logo = load_tinted_logo(LOGO_PATH, tint=(0, 255, 70), opacity=220)
+    # logo = load_mask_logo(LOGO_PATH, color=(0, 255, 70), opacity=220)
+    except Exception:
+        logo = None  # Fail gracefully if asset missing
+
+
     # event log + ticker
     ev_tail = SystemLogTail(lookback_seconds=3600, max_events=60) if WIN32_EVT_OK else None
     ticker = Ticker(font)
@@ -614,6 +654,13 @@ def main():
                      f"DSK {d['name']} {human_gb(d['used_gb'])}/{human_gb(d['total_gb'])}",
                      f"{bar_pct:.0f}%")
             y += BAR_H + BAR_GAP
+        logo_top = y + 6
+        logo_bottom = GRAPH_Y - 12  # stay clear of the graph header/legend
+        available_h = logo_bottom - logo_top
+        if logo and available_h >= 40:
+            area_rect = pygame.Rect(24, logo_top, WIDTH - 48, available_h)
+            draw_logo_centered(screen, logo, area_rect, pad=6, allow_upscale=True)
+
 
         # divider above graph
         pygame.draw.line(screen, GREEN, (12, GRAPH_Y - 8), (WIDTH - 12, GRAPH_Y - 8), 1)
