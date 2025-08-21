@@ -120,6 +120,19 @@ def glow_text(surface, font, text, pos, color=GREEN, glow=DIM_GREEN, offset=1):
     surface.blit(surf_g, (x + offset, y + offset))
     surface.blit(font.render(text, True, color), pos)
 
+
+def load_tinted_logo(path, tint=(0, 255, 70), opacity=220):
+    """
+    Load a white/gray PNG and tint it Fallout-green, preserving antialiasing.
+    """
+    surf = pygame.image.load(path).convert_alpha()
+    tint_surf = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+    tint_surf.fill((*tint, 255))
+    surf = surf.copy()
+    surf.blit(tint_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    surf.set_alpha(opacity)
+    return surf
+
 try:
     import win32evtlogutil  # type: ignore
 except Exception:  # pragma: no cover - only on Windows
@@ -518,45 +531,19 @@ class Ticker:
         surface.blit(self.surf, (int(self.x) + self.surf.get_width() + 40, y + 8))
         surface.set_clip(prev)
 
-# ----------------------------
-# Start screen with ASCII gear
-# ----------------------------
-GEAR = [
-    "                                      ",
-    "                                      ",
-    "                                      ",
-    "                                      ",
-    "                                      ",
-    "      <<<<<<<<  /oo0oo\\  >>>>>>>>>     ",
-    "               /ooooooo\\              ",
-    "  <<<<<<<<<<< |000o0o000| >>>>>>>>>>>>",
-    "               \\ooooooo/               ",
-    "     <<<<<<<<<  \\oo0oo/  >>>>>>>>>      ",
-    "                                       ",
-    "                                       ",
-    "                                       ",
-    "                                       ",
-    "                                       ",
-]
-
-def start_screen(surface, font_lg):
+def start_screen(surface, font_lg, logo):
     surface.fill(BG_COLOR)
     draw_scanlines(surface)
-    # center the gear block
-    gear_font = pygame.font.SysFont(FONT_NAME, 18, bold=True) or pygame.font.SysFont(None, 18, bold=True)
-    gear_w = max(gear_font.size(line)[0] for line in GEAR)
-    gear_h = len(GEAR) * (gear_font.get_height() + 0)
 
-    gx = (WIDTH - gear_w) // 2
-    gy = 160
-
-    for i, line in enumerate(GEAR):
-        glow_text(surface, gear_font, line, (gx, gy + i * (gear_font.get_height())))
+    lw, lh = logo.get_size()
+    lx = (WIDTH - lw) // 2
+    ly = 160
+    surface.blit(logo, (lx, ly))
 
     # START button rectangle in middle
     btn_w, btn_h = 200, 56
     btn_x = (WIDTH - btn_w) // 2
-    btn_y = gy + gear_h + 30
+    btn_y = ly + lh + 30
 
     pygame.draw.rect(surface, GREEN, (btn_x, btn_y, btn_w, btn_h), width=2)
     # emboss lines
@@ -596,6 +583,11 @@ def main():
         font_sm = pygame.font.SysFont(None, FONT_SIZE_SMALL, bold=True)
         font_lg = pygame.font.SysFont(None, FONT_SIZE_LARGE, bold=True)
 
+    logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+    logo = load_tinted_logo(logo_path)
+    logo_start = pygame.transform.smoothscale(logo, (200, 200))
+    logo_main = pygame.transform.smoothscale(logo, (120, 120))
+
     # data provider
     provider = DemoStats() if args.demo else RealStats()
 
@@ -625,7 +617,7 @@ def main():
             screen.fill(BG_COLOR)
             draw_scanlines(screen)
             draw_header(screen, font_lg, font_sm)
-            start_btn_rect = start_screen(screen, font_lg)
+            start_btn_rect = start_screen(screen, font_lg, logo_start)
             pygame.display.flip()
             clock.tick(FPS)
             continue
@@ -658,6 +650,10 @@ def main():
                      f"DSK {d['name']} {human_gb(d['used_gb'])}/{human_gb(d['total_gb'])}",
                      f"{bar_pct:.0f}%")
             y += BAR_H + BAR_GAP
+
+        logo_x = (WIDTH - logo_main.get_width()) // 2
+        logo_y = GRAPH_Y - logo_main.get_height() - 25
+        screen.blit(logo_main, (logo_x, logo_y))
 
         # divider above graph
         pygame.draw.line(screen, GREEN, (12, GRAPH_Y - 8), (WIDTH - 12, GRAPH_Y - 8), 1)
