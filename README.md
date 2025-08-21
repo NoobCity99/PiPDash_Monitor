@@ -120,6 +120,7 @@ If you’re on a small display and want true fullscreen:
 
 ```
 --demo          Use simulated stats (works everywhere; great for UI iteration)
+--icon PATH     Use a custom window icon (.ico). Defaults to 'pippy.ico' if found.
 ```
 
 Planned:

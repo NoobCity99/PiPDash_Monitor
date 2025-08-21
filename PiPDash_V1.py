@@ -583,10 +583,29 @@ def start_screen(surface, font_lg, logo):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--demo", action="store_true", help="Run with simulated data (no sensors needed)")
+    parser.add_argument(
+        "--icon",
+        metavar="PATH",
+        help="Path to a .ico file for the window icon (defaults to 'pippy.ico' if present)",
+    )
     args = parser.parse_args()
 
     pygame.init()
     pygame.display.set_caption("Vault-Tec Monitor")
+
+    icon_path = args.icon
+    if not icon_path:
+        default_icon = os.path.join(os.path.dirname(__file__), "pippy.ico")
+        if os.path.exists(default_icon):
+            icon_path = default_icon
+    elif not os.path.isabs(icon_path):
+        icon_path = os.path.join(os.path.dirname(__file__), icon_path)
+    if icon_path and os.path.exists(icon_path):
+        try:
+            pygame.display.set_icon(pygame.image.load(icon_path))
+        except Exception as exc:  # pragma: no cover - icon failures are non-critical
+            print(f"Could not load icon '{icon_path}': {exc}")
+
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
 
