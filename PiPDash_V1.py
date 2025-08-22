@@ -6,6 +6,8 @@ import re
 import sys
 import time
 from collections import deque
+import datetime
+import logging
 
 import pygame
 import psutil
@@ -31,6 +33,8 @@ if sys.platform == "win32":
         WIN32_EVT_OK = True
     except Exception:
         WIN32_EVT_OK = False
+
+logging.basicConfig(level=logging.INFO)
 
 # ----------------------------
 # Display config (portrait)
@@ -212,7 +216,7 @@ class SystemLogTail:
             hlog = win32evtlog.OpenEventLog(server, logtype)
             flags = (win32evtlog.EVENTLOG_BACKWARDS_READ |
                      win32evtlog.EVENTLOG_SEQUENTIAL_READ)
-            cutoff = time.time() - self.lookback_seconds
+            cutoff = datetime.datetime.now() - datetime.timedelta(seconds=self.lookback_seconds)
             newest_seen = self._last_record
 
             while True:
@@ -220,8 +224,9 @@ class SystemLogTail:
                 if not events:
                     break
                 for ev in events:
+                    evt_time = getattr(ev, "TimeGenerated", None)
                     # stop once we’ve passed our time window
-                    if ev.TimeGenerated and ev.TimeGenerated < cutoff:
+                    if evt_time and evt_time < cutoff:
                         win32evtlog.CloseEventLog(hlog)
                         return
 
@@ -257,7 +262,7 @@ class SystemLogTail:
                         "level": level,
                         "source": source,
                         "event_id": int(event_id),
-                        "time": time.strftime("%H:%M:%S", time.localtime(ev.TimeGenerated)) if ev.TimeGenerated else "--:--:--",
+                        "time": evt_time.strftime("%H:%M:%S") if evt_time else "--:--:--",
                         "message": msg,
                     }
                     self.buffer.appendleft(item)
@@ -265,8 +270,7 @@ class SystemLogTail:
 
             win32evtlog.CloseEventLog(hlog)
         except Exception:
-            # Swallow transient API errors; the UI should keep running
-            pass
+            logging.exception("System log poll failed")
 
     def latest(self, n=25):
         return list(self.buffer)[:n]

@@ -156,7 +156,7 @@ Exponential moving average and 1 Hz sampling keep CPU % from “hummingbird jitt
 
 ## Windows System Log Ticker
 
-The ticker shows **CRITICAL/ERROR/WARNING** from the **System** log in the last hour for these sources:
+The ticker shows **ALL INFO & CRITICAL/ERROR/WARNING** from the **System** log in the last hour for these sources:
 
 - `Kernel-Power` (unexpected shutdowns)
 - `Disk` / `Ntfs` (I/O anomalies)
