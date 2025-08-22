@@ -231,18 +231,7 @@ class SystemLogTail:
                         return
 
                     full_id = getattr(ev, "EventID", 0) or 0
-                    severity = SEVERITY_MAP.get((full_id >> 30) & 0x3, "INFO")
-                    if severity not in ("ERROR", "WARNING"):
-                        continue
-
-                    level = severity
-                    if (
-                        severity == "ERROR"
-                        and getattr(ev, "EventType", 0) == 1
-                        and ((full_id >> 30) & 0x3) == 3
-                        and getattr(ev, "EventCategory", 0) == 1
-                    ):
-                        level = "CRITICAL"
+                    level = EVENT_TYPES.get(getattr(ev, "EventType", 0), "INFO")
 
                     source = getattr(ev, "SourceName", "") or ""
                     if not self._source_wanted(source):
@@ -288,9 +277,7 @@ class SystemLogTail:
         for e in self.latest(25):
             parts.append(f"[{e['time']}] {e['level']}: {e['source']}({e['event_id']}) — {e['message']}")
         if not parts:
-            return (
-                "EVENTS: No recent warnings, errors, or critical events in the last hour."
-            )
+            return "EVENTS: No events in the last hour."
         return "   |   ".join(parts) + "   |   "
 
 # ----------------------------
