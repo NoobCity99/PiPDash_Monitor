@@ -40,6 +40,8 @@ FPS = 30
 
 # Throttle CPU sampling to calm the gauge needle
 CPU_SAMPLE_SEC = 0.5
+# Throttle disk usage sampling (expensive system calls)
+DISK_SAMPLE_SEC = 5.0
 
 # ----------------------------
 # Pip-Boy vibe (colors & style)
@@ -115,9 +117,16 @@ def pct(a, b):
 def human_gb(x):
     return f"{x:.1f} GB"
 
+_SCANLINE_SURF = None
+
+
 def draw_scanlines(surface):
-    for y in range(0, HEIGHT, SCANLINE_STEP):
-        pygame.draw.line(surface, SCANLINE_COLOR, (0, y), (WIDTH, y), 1)
+    global _SCANLINE_SURF
+    if _SCANLINE_SURF is None:
+        _SCANLINE_SURF = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        for y in range(0, HEIGHT, SCANLINE_STEP):
+            pygame.draw.line(_SCANLINE_SURF, SCANLINE_COLOR, (0, y), (WIDTH, y), 1)
+    surface.blit(_SCANLINE_SURF, (0, 0))
 
 def glow_text(surface, font, text, pos, color=GREEN, glow=DIM_GREEN, offset=1):
     x, y = pos
@@ -295,6 +304,8 @@ class RealStats:
         self.last_cpu_ts = 0.0
         self.last_net = psutil.net_io_counters(pernic=False)
         self.last_t = time.time()
+        self.last_disk_ts = 0.0
+        self.last_disks = []
 
     def _gpu(self):
         if not NVML_OK:
@@ -333,19 +344,23 @@ class RealStats:
         mem_total_gb = mem.total / (1024**3)
         mem_pct = mem.percent
 
-        disks = []
-        for p in psutil.disk_partitions(all=False):
-            mount = p.mountpoint
-            try:
-                u = psutil.disk_usage(mount)
-                disks.append({
-                    "name": mount,
-                    "used_gb": u.used / (1024**3),
-                    "total_gb": u.total / (1024**3),
-                    "pct": pct(u.used, u.total),
-                })
-            except Exception:
-                continue
+        if now - self.last_disk_ts >= DISK_SAMPLE_SEC:
+            disks = []
+            for p in psutil.disk_partitions(all=False):
+                mount = p.mountpoint
+                try:
+                    u = psutil.disk_usage(mount)
+                    disks.append({
+                        "name": mount,
+                        "used_gb": u.used / (1024**3),
+                        "total_gb": u.total / (1024**3),
+                        "pct": pct(u.used, u.total),
+                    })
+                except Exception:
+                    continue
+            self.last_disks = disks
+            self.last_disk_ts = now
+        disks = self.last_disks
 
         up, down = self._net()
         gpu = self._gpu()
@@ -403,13 +418,10 @@ def draw_header(surface, font_lg, font_sm, data_src_label="OS"):
     # thin divider
     pygame.draw.line(surface, GREEN, (12, 58), (WIDTH - 12, 58), 1)
 
-def draw_gauge(surface, center, radius, value, vmin, vmax, label, unit, hot=False):
-    cx, cy = center
-    # frame arc
-    pygame.draw.arc(surface, GREEN,
-                    (cx - radius, cy - radius, radius * 2, radius * 2),
-                    GAUGE_ANGLE_MIN, GAUGE_ANGLE_MAX, 3)
-    # tick marks
+def _make_gauge_frame(radius: int) -> pygame.Surface:
+    surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+    cx, cy = radius, radius
+    pygame.draw.arc(surf, GREEN, (0, 0, radius * 2, radius * 2), GAUGE_ANGLE_MIN, GAUGE_ANGLE_MAX, 3)
     ticks = 7
     for i in range(ticks):
         a = GAUGE_ANGLE_MIN + (GAUGE_SWEEP * i / (ticks - 1))
@@ -417,7 +429,13 @@ def draw_gauge(surface, center, radius, value, vmin, vmax, label, unit, hot=Fals
         y1 = cy + (radius - 10) * math.sin(a)
         x2 = cx + (radius - 2) * math.cos(a)
         y2 = cy + (radius - 2) * math.sin(a)
-        pygame.draw.line(surface, GREEN, (x1, y1), (x2, y2), 2)
+        pygame.draw.line(surf, GREEN, (x1, y1), (x2, y2), 2)
+    return surf
+
+
+def draw_gauge(surface, center, radius, value, vmin, vmax, label, unit, font, font_sm, frame_surf, hot=False):
+    cx, cy = center
+    surface.blit(frame_surf, (cx - radius, cy - radius))
 
     # needle
     if value is not None:
@@ -428,10 +446,6 @@ def draw_gauge(surface, center, radius, value, vmin, vmax, label, unit, hot=Fals
         pygame.draw.line(surface, GREEN, (cx, cy), (nx, ny), 3)
         pygame.draw.circle(surface, GREEN, (int(cx), int(cy)), 4, 0)
 
-    # label & value
-    font = pygame.font.SysFont(FONT_NAME, FONT_SIZE, bold=True) or pygame.font.SysFont(None, FONT_SIZE, bold=True)
-    font_sm = pygame.font.SysFont(FONT_NAME, FONT_SIZE_SMALL, bold=True) or pygame.font.SysFont(None, FONT_SIZE_SMALL, bold=True)
-
     vtxt = "--" if value is None else (f"{int(round(value))}{unit}")
     vcolor = (255, 60, 60) if hot else GREEN
     glow_text(surface, font, vtxt, (cx - 20, cy + radius - 50), color=vcolor)
@@ -439,21 +453,20 @@ def draw_gauge(surface, center, radius, value, vmin, vmax, label, unit, hot=Fals
     lab_w, _ = font_sm.size(label)
     glow_text(surface, font_sm, label, (int(cx - lab_w/2), int(cy + radius - 70)))
 
-def draw_bar(surface, x1, y1, x2, y2, pct_val, label, right_text):
+def draw_bar(surface, font, x1, y1, x2, y2, pct_val, label, right_text):
     # frame
     pygame.draw.rect(surface, GREEN, (x1, y1, x2 - x1, y2 - y1), width=1)
     # fill
     fill_w = int((x2 - x1 - 8) * clamp(pct_val / 100.0, 0.0, 1.0))
     pygame.draw.rect(surface, GREEN, (x1 + 1, y1 + 1, fill_w, (y2 - y1) - 2), width=0)
 
-    font = pygame.font.SysFont(FONT_NAME, FONT_SIZE, bold=True) or pygame.font.SysFont(None, FONT_SIZE, bold=True)
     # text BELOW bar
     glow_text(surface, font, f"{label}", (x1 + 1, y2 + 1))
     rt_surf = font.render(right_text, True, GREEN)
     surface.blit(rt_surf, (x2 - rt_surf.get_width(), y2 + 1))
 
 
-def draw_graph(surface, x, y, w, h, up_hist, down_hist):
+def draw_graph(surface, font, x, y, w, h, up_hist, down_hist):
     """Centered baseline: upload spikes up, download spikes down."""
     # frame
     pygame.draw.rect(surface, GREEN, (x, y, w, h), width=1)
@@ -505,7 +518,6 @@ def draw_graph(surface, x, y, w, h, up_hist, down_hist):
             pygame.draw.line(surface, DIM_GREEN, pts[i], pts[i + 1], 2)
 
     # legend & vmax
-    font = pygame.font.SysFont(FONT_NAME, FONT_SIZE_SMALL, bold=True) or pygame.font.SysFont(None, FONT_SIZE_SMALL, bold=True)
     glow_text(surface, font, f"NET ↑ / ↓  (Mb/s)   ±max={vmax:.0f}", (x + 8, y + 6))
 
 # ----------------------------
@@ -631,6 +643,8 @@ def main():
     ev_tail = SystemLogTail(lookback_seconds=3600, max_events=60) if WIN32_EVT_OK else None
     ticker = Ticker(font)
 
+    gauge_frame = _make_gauge_frame(GAUGE_RADIUS)
+
     # histories for graph
     up_hist = deque(maxlen=GRAPH_POINTS)
     dn_hist = deque(maxlen=GRAPH_POINTS)
@@ -673,16 +687,16 @@ def main():
         gpu_util = snap.get("gpu_util_pct")
         ram_pct = snap.get("ram_pct")
 
-        draw_gauge(screen, centers[0], GAUGE_RADIUS, cpu_pct, 0, 100, "CPU LOAD", "%", hot=(cpu_pct is not None and cpu_pct >= CPU_HOT_PCT))
-        draw_gauge(screen, centers[1], GAUGE_RADIUS, gpu_util, 0, 100, "GPU LOAD", "%", hot=(gpu_util is not None and gpu_util >= GPU_HOT_PCT))
-        draw_gauge(screen, centers[2], GAUGE_RADIUS, ram_pct, 0, 100, "RAM USAGE", "%", hot=(ram_pct is not None and ram_pct >= RAM_HOT_PCT))
+        draw_gauge(screen, centers[0], GAUGE_RADIUS, cpu_pct, 0, 100, "CPU LOAD", "%", font, font_sm, gauge_frame, hot=(cpu_pct is not None and cpu_pct >= CPU_HOT_PCT))
+        draw_gauge(screen, centers[1], GAUGE_RADIUS, gpu_util, 0, 100, "GPU LOAD", "%", font, font_sm, gauge_frame, hot=(gpu_util is not None and gpu_util >= GPU_HOT_PCT))
+        draw_gauge(screen, centers[2], GAUGE_RADIUS, ram_pct, 0, 100, "RAM USAGE", "%", font, font_sm, gauge_frame, hot=(ram_pct is not None and ram_pct >= RAM_HOT_PCT))
 
         # --- Middle bars (Disks only; RAM bar removed) ---
         y = MID_BAND_Y + 10
         # Disks (up to 6 rows)
         for d in (snap["disks"] or [])[:6]:
             bar_pct = clamp(d["pct"], 0, 100)
-            draw_bar(screen, BAR_LEFT, y, BAR_RIGHT, y + BAR_H, bar_pct,
+            draw_bar(screen, font, BAR_LEFT, y, BAR_RIGHT, y + BAR_H, bar_pct,
                      f"DSK {d['name']} {human_gb(d['used_gb'])}/{human_gb(d['total_gb'])}",
                      f"{bar_pct:.0f}%")
             y += BAR_H + BAR_GAP
@@ -697,7 +711,7 @@ def main():
         # --- Bottom graph (NET) ---
         up_hist.append(snap["net_up_mbps"])
         dn_hist.append(snap["net_down_mbps"])
-        draw_graph(screen, 12, GRAPH_Y, WIDTH - 24, GRAPH_H, up_hist, dn_hist)
+        draw_graph(screen, font_sm, 12, GRAPH_Y, WIDTH - 24, GRAPH_H, up_hist, dn_hist)
 
         # --- Event ticker at very bottom ---
         # Poll every 5 seconds
