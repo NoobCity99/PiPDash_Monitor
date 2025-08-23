@@ -8,7 +8,7 @@ import time
 from collections import deque
 import datetime
 import logging
-import wmi 
+import threading
 import pygame
 import psutil
 
@@ -19,10 +19,11 @@ WMI_CLIENT = None
 if sys.platform == "win32":
     try:
         import wmi  # type: ignore
-        WMI_CLIENT = wmi.WMI(namespace=r"root\CIMV2")
-    except Exception as e:
-        logging.exception("WMI init failed")
-        WMI_CLIENT = None
+    except Exception:
+        logging.exception("wmi import failed")
+        wmi = None
+else:
+    wmi = None
 
 # ----------------------------
 # Optional Windows Event Log (pywin32)
@@ -128,11 +129,28 @@ _SCANLINE_SURF = None
 _TEXT_CACHE: dict[tuple[int, str, tuple[int, int, int]], pygame.Surface] = {}
 
 
+def _ensure_wmi_client():
+    global WMI_CLIENT
+    if WMI_CLIENT is not None or sys.platform != "win32" or wmi is None:
+        return WMI_CLIENT
+    try:
+        WMI_CLIENT = wmi.WMI(namespace=r"root\CIMV2")
+    except Exception:
+        logging.exception("WMI init failed")
+        WMI_CLIENT = None
+    return WMI_CLIENT
+
+
 def _gpu_3d_util_windows() -> float | None:
+    _ensure_wmi_client()
     if WMI_CLIENT is None:
         return None
     try:
+        if not hasattr(WMI_CLIENT, "Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine"):
+            return None
         engines = WMI_CLIENT.Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine()
+        if not engines:
+            return None
         total = 0.0
         found_3d = False
         for e in engines:
@@ -148,12 +166,6 @@ def _gpu_3d_util_windows() -> float | None:
     except Exception:
         logging.exception("GPU perf counter query failed")
         return None
-
-
-
-GPU_COUNTERS_OK = _gpu_3d_util_windows() is not None
-
-
 def gauge_rect(center, radius):
     cx, cy = center
     return pygame.Rect(cx - radius - 10, cy - radius - 10, radius * 2 + 20, radius * 2 + 40)
@@ -356,30 +368,34 @@ class RealStats:
         self.last_mem_ts = time.time()
         self.last_disk_ts = 0.0
         self.last_disks = []
-        self._gpu_sample_sec = 0.25
-        self._gpu_last_ts = 0.0
-        self._gpu_ema = None
+        self._gpu_val = None
+        self._gpu_thread = threading.Thread(target=self._gpu_sampler, daemon=True)
+        self._gpu_thread.start()
+
+    def _gpu_sampler(self):
+        alpha = 0.3
+        while True:
+            util = _gpu_3d_util_windows()
+            if util is None:
+                self._gpu_val = None
+            else:
+                if self._gpu_val is None:
+                    self._gpu_val = util
+                else:
+                    self._gpu_val = alpha * util + (1 - alpha) * self._gpu_val
+            time.sleep(1.0)
 
     def _gpu(self):
-        now = time.time()
-        if now - self._gpu_last_ts >= self._gpu_sample_sec:
-            util = _gpu_3d_util_windows()
-            self._gpu_last_ts = now
-            if util is None:
-                self._gpu_ema = None
-            else:
-                alpha = 0.3
-                if self._gpu_ema is None:
-                    self._gpu_ema = util
-                else:
-                    self._gpu_ema = alpha * util + (1 - alpha) * self._gpu_ema
-        if self._gpu_ema is None:
+        if self._gpu_val is None:
             return None
         return {
-            "util_pct": self._gpu_ema,
+            "util_pct": self._gpu_val,
             "vram_used_gb": None,
             "vram_total_gb": None,
         }
+
+    def gpu_data_src(self):
+        return "TM-3D" if WMI_CLIENT is not None and self._gpu_val is not None else "OS"
 
     def _net(self):
         now = time.time()
@@ -469,13 +485,16 @@ class DemoStats:
             "net_down_mbps": down,
         }
 
+    def gpu_data_src(self):
+        return "OS"
+
 # ----------------------------
 # UI Widgets
 # ----------------------------
 def draw_header(surface, font_lg, font_sm, data_src_label="OS"):
     glow_text(surface, font_lg, "VAULT-TEC // SYSTEMS MONITOR", (14, 5))
-    # data source badge (TM-3D/OS)
-    badge = f"DATA SRC: {'TM-3D' if GPU_COUNTERS_OK else data_src_label}"
+    # data source badge
+    badge = f"DATA SRC: {data_src_label}"
     bw, _ = font_sm.size(badge)
     glow_text(surface, font_sm, badge, (WIDTH - bw - 14, 32))
     # thin divider
@@ -715,13 +734,14 @@ def main():
     _render_text_cached("VAULT-TEC // SYSTEMS MONITOR", font_lg)
     for lab in ("CPU LOAD", "GPU LOAD", "RAM USAGE"):
         _render_text_cached(lab, font_sm)
+    for badge in ("DATA SRC: OS", "DATA SRC: TM-3D"):
+        _render_text_cached(badge, font_sm)
 
     gauge_frame = _make_gauge_frame(GAUGE_RADIUS)
 
     background = pygame.Surface((WIDTH, HEIGHT))
     background.fill(BG_COLOR)
     draw_scanlines(background)
-    draw_header(background, font_lg, font_sm)
     logo_x = (WIDTH - logo_main.get_width()) // 2 + LOGO_MAIN_X_OFFSET
     logo_y = GRAPH_Y - logo_main.get_height() + LOGO_MAIN_Y_OFFSET
     background.blit(logo_main, (logo_x, logo_y))
@@ -750,7 +770,7 @@ def main():
         if state == "start":
             screen.fill(BG_COLOR)
             draw_scanlines(screen)
-            draw_header(screen, font_lg, font_sm)
+            draw_header(screen, font_lg, font_sm, provider.gpu_data_src())
             start_btn_rect = start_screen(screen, font_lg, logo_start)
             pygame.display.update([screen.get_rect()])
             clock.tick(FPS)
@@ -763,6 +783,11 @@ def main():
             screen.blit(background, (0, 0))
             dirty.append(screen.get_rect())
             need_full_redraw = False
+
+        header_rect = pygame.Rect(0, 0, WIDTH, 60)
+        screen.blit(background, header_rect, header_rect)
+        draw_header(screen, font_lg, font_sm, provider.gpu_data_src())
+        dirty.append(header_rect)
 
         gy = 150
         centers = [(80, gy), (240, gy), (400, gy)]
