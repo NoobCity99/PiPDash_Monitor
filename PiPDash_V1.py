@@ -8,20 +8,21 @@ import time
 from collections import deque
 import datetime
 import logging
-
+import wmi 
 import pygame
 import psutil
 
 # ----------------------------
-# Optional GPU metrics via NVIDIA NVML
+# Optional GPU metrics via Windows Performance Counters
 # ----------------------------
-NVML_OK = False
-try:
-    import pynvml  # type: ignore
-    pynvml.nvmlInit()
-    NVML_OK = True
-except Exception:
-    NVML_OK = False
+WMI_CLIENT = None
+if sys.platform == "win32":
+    try:
+        import wmi  # type: ignore
+        WMI_CLIENT = wmi.WMI(namespace=r"root\CIMV2")
+    except Exception as e:
+        logging.exception("WMI init failed")
+        WMI_CLIENT = None
 
 # ----------------------------
 # Optional Windows Event Log (pywin32)
@@ -125,6 +126,32 @@ def human_gb(x):
 
 _SCANLINE_SURF = None
 _TEXT_CACHE: dict[tuple[int, str, tuple[int, int, int]], pygame.Surface] = {}
+
+
+def _gpu_3d_util_windows() -> float | None:
+    if WMI_CLIENT is None:
+        return None
+    try:
+        engines = WMI_CLIENT.Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine()
+        total = 0.0
+        found_3d = False
+        for e in engines:
+            name = getattr(e, "Name", "") or ""
+            u = float(getattr(e, "UtilizationPercentage", 0) or 0)
+            if "engtype_3D" in name:
+                total += u
+                found_3d = True
+        if not found_3d:
+            # fallback: sum all engines so we still get a value
+            total = sum(float(getattr(e, "UtilizationPercentage", 0) or 0) for e in engines)
+        return clamp(total, 0.0, 100.0)
+    except Exception:
+        logging.exception("GPU perf counter query failed")
+        return None
+
+
+
+GPU_COUNTERS_OK = _gpu_3d_util_windows() is not None
 
 
 def gauge_rect(center, radius):
@@ -329,23 +356,30 @@ class RealStats:
         self.last_mem_ts = time.time()
         self.last_disk_ts = 0.0
         self.last_disks = []
+        self._gpu_sample_sec = 0.25
+        self._gpu_last_ts = 0.0
+        self._gpu_ema = None
 
     def _gpu(self):
-        if not NVML_OK:
+        now = time.time()
+        if now - self._gpu_last_ts >= self._gpu_sample_sec:
+            util = _gpu_3d_util_windows()
+            self._gpu_last_ts = now
+            if util is None:
+                self._gpu_ema = None
+            else:
+                alpha = 0.3
+                if self._gpu_ema is None:
+                    self._gpu_ema = util
+                else:
+                    self._gpu_ema = alpha * util + (1 - alpha) * self._gpu_ema
+        if self._gpu_ema is None:
             return None
-        try:
-            h = pynvml.nvmlDeviceGetHandleByIndex(0)
-            util = float(pynvml.nvmlDeviceGetUtilizationRates(h).gpu)
-            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
-            vram_used_gb = mem.used / (1024**3)
-            vram_total_gb = mem.total / (1024**3)
-            return {
-                "util_pct": util,
-                "vram_used_gb": vram_used_gb,
-                "vram_total_gb": vram_total_gb,
-            }
-        except Exception:
-            return None
+        return {
+            "util_pct": self._gpu_ema,
+            "vram_used_gb": None,
+            "vram_total_gb": None,
+        }
 
     def _net(self):
         now = time.time()
@@ -440,8 +474,8 @@ class DemoStats:
 # ----------------------------
 def draw_header(surface, font_lg, font_sm, data_src_label="OS"):
     glow_text(surface, font_lg, "VAULT-TEC // SYSTEMS MONITOR", (14, 5))
-    # data source badge (NVML/OS)
-    badge = f"DATA SRC: {'NVML' if NVML_OK else data_src_label}"
+    # data source badge (TM-3D/OS)
+    badge = f"DATA SRC: {'TM-3D' if GPU_COUNTERS_OK else data_src_label}"
     bw, _ = font_sm.size(badge)
     glow_text(surface, font_sm, badge, (WIDTH - bw - 14, 32))
     # thin divider
