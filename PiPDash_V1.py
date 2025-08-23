@@ -74,6 +74,9 @@ CPU_SAMPLE_SEC = 0.5
 DISK_SAMPLE_SEC = 5.0
 MEM_SAMPLE_SEC = 0.5
 NET_SAMPLE_SEC = 0.25
+# Throttle GPU sampling and smooth readings to calm the gauge needle
+GPU_SAMPLE_SEC = 0.5
+GPU_SMOOTH_ALPHA = 0.4  # EMA factor (0-1)
 
 # ----------------------------
 # Pip-Boy vibe (colors & style)
@@ -364,19 +367,29 @@ class RealStats:
         self.last_mem_ts = time.time()
         self.last_disk_ts = 0.0
         self.last_disks = []
+        self.last_gpu_util = 0.0
+        self.last_gpu_ts = 0.0
 
     def _gpu(self):
         if not WIN32_GPU_PDH_OK:
             return None
-        try:
-            win32pdh.CollectQueryData(_GPU_QUERY)
-            total = 0.0
-            for h in _GPU_COUNTERS:
-                _, val = win32pdh.GetFormattedCounterValue(h, win32pdh.PDH_FMT_DOUBLE)
-                total += val
-            return {"util_pct": clamp(total, 0.0, 100.0)}
-        except Exception:
-            return None
+        now = time.time()
+        if now - self.last_gpu_ts >= GPU_SAMPLE_SEC:
+            try:
+                win32pdh.CollectQueryData(_GPU_QUERY)
+                total = 0.0
+                for h in _GPU_COUNTERS:
+                    _, val = win32pdh.GetFormattedCounterValue(h, win32pdh.PDH_FMT_DOUBLE)
+                    total += val
+                raw = clamp(total, 0.0, 100.0)
+                if self.last_gpu_ts == 0.0:
+                    self.last_gpu_util = raw
+                else:
+                    self.last_gpu_util += (raw - self.last_gpu_util) * GPU_SMOOTH_ALPHA
+                self.last_gpu_ts = now
+            except Exception:
+                return None
+        return {"util_pct": self.last_gpu_util}
 
     def _net(self):
         now = time.time()
