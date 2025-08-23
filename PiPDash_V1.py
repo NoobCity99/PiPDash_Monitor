@@ -26,6 +26,18 @@ else:
     wmi = None
 
 # ----------------------------
+# Optional PDH access (pywin32)
+# ----------------------------
+if sys.platform == "win32":
+    try:
+        import win32pdh  # type: ignore
+    except Exception:
+        logging.exception("win32pdh import failed")
+        win32pdh = None
+else:
+    win32pdh = None
+
+# ----------------------------
 # Optional Windows Event Log (pywin32)
 # ----------------------------
 WIN32_EVT_OK = False
@@ -166,6 +178,45 @@ def _gpu_3d_util_windows() -> float | None:
     except Exception:
         logging.exception("GPU perf counter query failed")
         return None
+
+
+def _gpu_3d_util_windows_pdh() -> float | None:
+    """Query total 3D engine utilization using PDH.
+
+    Opens a query for ``GPU Engine(*engtype_3D)\\Utilization Percentage``
+    counters, sums the results, and returns the utilization percentage
+    clamped to ``0-100``.  ``None`` is returned on any failure.
+    """
+    if sys.platform != "win32" or win32pdh is None:
+        return None
+    query = counter = None
+    try:
+        query = win32pdh.OpenQuery()
+        counter = win32pdh.AddCounter(
+            query,
+            r"\\GPU Engine(*engtype_3D)\\Utilization Percentage",
+            0,
+        )
+        # Prime the query and then read a sample
+        win32pdh.CollectQueryData(query)
+        win32pdh.CollectQueryData(query)
+        _, vals = win32pdh.GetFormattedCounterArray(counter, win32pdh.PDH_FMT_DOUBLE)
+        total = sum(v.get("value", 0.0) for v in vals)
+        return clamp(total, 0.0, 100.0)
+    except Exception:
+        logging.exception("GPU PDH query failed")
+        return None
+    finally:
+        if counter is not None:
+            try:
+                win32pdh.RemoveCounter(counter)
+            except Exception:
+                pass
+        if query is not None:
+            try:
+                win32pdh.CloseQuery(query)
+            except Exception:
+                pass
 def gauge_rect(center, radius):
     cx, cy = center
     return pygame.Rect(cx - radius - 10, cy - radius - 10, radius * 2 + 20, radius * 2 + 40)
@@ -374,15 +425,52 @@ class RealStats:
 
     def _gpu_sampler(self):
         alpha = 0.3
-        while True:
-            util = _gpu_3d_util_windows()
-            if util is None:
+
+        def smooth(u):
+            if u is None:
                 self._gpu_val = None
+            elif self._gpu_val is None:
+                self._gpu_val = u
             else:
-                if self._gpu_val is None:
-                    self._gpu_val = util
-                else:
-                    self._gpu_val = alpha * util + (1 - alpha) * self._gpu_val
+                self._gpu_val = alpha * u + (1 - alpha) * self._gpu_val
+
+        if win32pdh is not None:
+            query = counter = None
+            try:
+                query = win32pdh.OpenQuery()
+                counter = win32pdh.AddCounter(
+                    query,
+                    r"\\GPU Engine(*engtype_3D)\\Utilization Percentage",
+                    0,
+                )
+                win32pdh.CollectQueryData(query)
+                while True:
+                    time.sleep(1.0)
+                    win32pdh.CollectQueryData(query)
+                    try:
+                        _, vals = win32pdh.GetFormattedCounterArray(counter, win32pdh.PDH_FMT_DOUBLE)
+                        total = sum(v.get("value", 0.0) for v in vals)
+                        util = clamp(total, 0.0, 100.0)
+                    except Exception:
+                        logging.exception("GPU PDH read failed")
+                        util = None
+                    smooth(util)
+            except Exception:
+                logging.exception("GPU PDH sampler failed")
+            finally:
+                if counter is not None:
+                    try:
+                        win32pdh.RemoveCounter(counter)
+                    except Exception:
+                        pass
+                if query is not None:
+                    try:
+                        win32pdh.CloseQuery(query)
+                    except Exception:
+                        pass
+
+        while True:
+            smooth(_gpu_3d_util_windows())
             time.sleep(1.0)
 
     def _gpu(self):
