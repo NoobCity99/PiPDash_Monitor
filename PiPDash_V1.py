@@ -384,41 +384,17 @@ class RealStats:
             else:
                 self._gpu_val = alpha * u + (1 - alpha) * self._gpu_val
 
-        if win32pdh is not None:
+        if win32pdh is None:
             return
-        query = counter = None
-        try:
-            query = win32pdh.OpenQuery()
-            counter = win32pdh.AddCounter(
-                query,
-                r"\\GPU Engine(*engtype_3D)\\Utilization Percentage",
-                0,
-            )
-            win32pdh.CollectQueryData(query)
-            while True:
-                time.sleep(1.0)
-                win32pdh.CollectQueryData(query)
-                try:
-                    _, vals = win32pdh.GetFormattedCounterArray(counter, win32pdh.PDH_FMT_DOUBLE)
-                    total = sum(v.get("value", 0.0) for v in vals)
-                    util = clamp(total, 0.0, 100.0)
-                except Exception:
-                    logging.exception("GPU PDH read failed")
-                    util = None
-                smooth(util)
-        except Exception:
-            logging.exception("GPU PDH sampler failed")
-        finally:
-            if counter is not None:
-                try:
-                    win32pdh.RemoveCounter(counter)
-                except Exception:
-                    pass
-            if query is not None:
-                try:
-                    win32pdh.CloseQuery(query)
-                except Exception:
-                    pass
+
+        while True:
+            try:
+                util = _gpu_3d_util_windows_pdh()
+            except Exception:
+                logging.exception("GPU PDH sampler failed")
+                util = None
+            smooth(util)
+            time.sleep(1.0)
 
     def _gpu(self):
         if self._gpu_val is None:
