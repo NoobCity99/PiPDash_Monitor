@@ -8,8 +8,19 @@ import time
 from collections import deque
 import datetime
 import logging
+from functools import lru_cache
 
 import pygame
+from pygame import (
+    SRCALPHA,
+    BLEND_RGBA_MULT,
+    KEYDOWN,
+    K_ESCAPE,
+    MOUSEBUTTONDOWN,
+    QUIT,
+    init as pg_init,
+    quit as pg_quit,
+)
 import psutil
 
 # ----------------------------
@@ -18,20 +29,26 @@ import psutil
 NVML_OK = False
 try:
     import pynvml  # type: ignore
-    pynvml.nvmlInit()
-    NVML_OK = True
-except Exception:
-    NVML_OK = False
+except (ImportError, OSError):
+    pynvml = None  # type: ignore[assignment]
+else:
+    try:
+        pynvml.nvmlInit()
+    except pynvml.NVMLError:  # type: ignore[attr-defined]
+        pynvml = None  # type: ignore[assignment]
+    else:
+        NVML_OK = True
 
 # ----------------------------
 # Optional Windows Event Log (pywin32)
 # ----------------------------
 WIN32_EVT_OK = False
+win32evtlog = None
 if sys.platform == "win32":
     try:
         import win32evtlog  # type: ignore
         WIN32_EVT_OK = True
-    except Exception:
+    except (ImportError, OSError):
         WIN32_EVT_OK = False
 
 logging.basicConfig(level=logging.INFO)
@@ -123,7 +140,6 @@ def pct(a, b):
 def human_gb(x):
     return f"{x:.1f} GB"
 
-_SCANLINE_SURF = None
 _TEXT_CACHE: dict[tuple[int, str, tuple[int, int, int]], pygame.Surface] = {}
 
 
@@ -144,13 +160,17 @@ def ticker_rect(y):
     return pygame.Rect(12, y, WIDTH - 24, TICKER_H - 12)
 
 
-def draw_scanlines(surface):
-    global _SCANLINE_SURF
-    if _SCANLINE_SURF is None:
-        _SCANLINE_SURF = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        for y in range(0, HEIGHT, SCANLINE_STEP):
-            pygame.draw.line(_SCANLINE_SURF, SCANLINE_COLOR, (0, y), (WIDTH, y), 1)
-    surface.blit(_SCANLINE_SURF, (0, 0))
+
+@lru_cache(maxsize=1)
+def _scanline_surface() -> pygame.Surface:
+    surf = pygame.Surface((WIDTH, HEIGHT), SRCALPHA)
+    for y in range(0, HEIGHT, SCANLINE_STEP):
+        pygame.draw.line(surf, SCANLINE_COLOR, (0, y), (WIDTH, y), 1)
+    return surf
+
+
+def draw_scanlines(surface: pygame.Surface) -> None:
+    surface.blit(_scanline_surface(), (0, 0))
 
 def _render_text_cached(text: str, font: pygame.font.Font, color: tuple[int, int, int] = GREEN) -> pygame.Surface:
     key = (id(font), text, color)
@@ -161,10 +181,20 @@ def _render_text_cached(text: str, font: pygame.font.Font, color: tuple[int, int
     return surf
 
 
-def glow_text(surface, font, text, pos, color=GREEN, glow=DIM_GREEN, offset=1):
+def glow_text(
+    surface: pygame.Surface,
+    font: pygame.font.Font,
+    text: str,
+    pos: tuple[int, int],
+    style: dict | None = None,
+) -> None:
     x, y = pos
     if not text:
         return
+    style = style or {}
+    color = style.get("color", GREEN)
+    glow = style.get("glow", DIM_GREEN)
+    offset = style.get("offset", 1)
     # simple "CRT glow": shadow underlay then main text
     surf_g = _render_text_cached(text, font, glow)
     surface.blit(surf_g, (x - offset, y - offset))
@@ -177,10 +207,10 @@ def load_tinted_logo(path, tint=(0, 255, 70), opacity=220):
     Load a white/gray PNG and tint it Fallout-green, preserving antialiasing.
     """
     surf = pygame.image.load(path).convert_alpha()
-    tint_surf = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+    tint_surf = pygame.Surface(surf.get_size(), SRCALPHA)
     tint_surf.fill((*tint, 255))
     surf = surf.copy()
-    surf.blit(tint_surf, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    surf.blit(tint_surf, (0, 0), special_flags=BLEND_RGBA_MULT)
     surf.set_alpha(opacity)
     return surf
 
@@ -194,7 +224,7 @@ def scale_logo(logo_surf, max_dim):
 
 try:
     import win32evtlogutil  # type: ignore
-except Exception:  # pragma: no cover - only on Windows
+except ImportError:  # pragma: no cover - only on Windows
     win32evtlogutil = None
 
 # ----------------------------
@@ -222,11 +252,7 @@ class SystemLogTail:
         self.lookback_seconds = lookback_seconds
         self.buffer = deque(maxlen=max_events)
         self._last_record = 0
-        self._source_regexes = (
-            [re.compile(pat, re.I) for pat in source_patterns]
-            if source_patterns
-            else None
-        )
+        self._source_regexes = [re.compile(pat, re.I) for pat in source_patterns] if source_patterns else []
 
     def _source_wanted(self, src: str) -> bool:
         if not self._source_regexes:
@@ -276,14 +302,14 @@ class SystemLogTail:
                     if win32evtlogutil:
                         try:
                             msg = win32evtlogutil.SafeFormatMessage(ev, logtype)[:160]
-                        except Exception:
+                        except OSError:
                             msg = ""
                     if not msg:
                         inserts = getattr(ev, "StringInserts", None)
                         if inserts:
                             try:
                                 msg = " ".join(str(x) for x in inserts if x)[:160]
-                            except Exception:
+                            except (OSError, TypeError, ValueError):
                                 msg = str(inserts[0])[:160]
 
                     item = {
@@ -297,8 +323,8 @@ class SystemLogTail:
                     self.buffer.appendleft(item)
                     self._last_record = max(self._last_record, recno)
 
-            win32evtlog.CloseEventLog(hlog)
-        except Exception:
+                win32evtlog.CloseEventLog(hlog)
+        except OSError:
             logging.exception("System log poll failed")
 
     def latest(self, n=25):
@@ -344,7 +370,7 @@ class RealStats:
                 "vram_used_gb": vram_used_gb,
                 "vram_total_gb": vram_total_gb,
             }
-        except Exception:
+        except pynvml.NVMLError:  # type: ignore[attr-defined]
             return None
 
     def _net(self):
@@ -385,7 +411,7 @@ class RealStats:
                         "total_gb": u.total / (1024**3),
                         "pct": pct(u.used, u.total),
                     })
-                except Exception:
+                except OSError:
                     continue
             self.last_disks = disks
             self.last_disk_ts = now
@@ -448,7 +474,7 @@ def draw_header(surface, font_lg, font_sm, data_src_label="OS"):
     pygame.draw.line(surface, GREEN, (12, 58), (WIDTH - 12, 58), 1)
 
 def _make_gauge_frame(radius: int) -> pygame.Surface:
-    surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+    surf = pygame.Surface((radius * 2, radius * 2), SRCALPHA)
     cx, cy = radius, radius
     pygame.draw.arc(surf, GREEN, (0, 0, radius * 2, radius * 2), GAUGE_ANGLE_MIN, GAUGE_ANGLE_MAX, 3)
     ticks = 7
@@ -477,7 +503,7 @@ def draw_gauge(surface, center, radius, value, vmin, vmax, label, unit, font, fo
 
     vtxt = "--" if value is None else (f"{int(round(value))}{unit}")
     vcolor = (255, 60, 60) if hot else GREEN
-    glow_text(surface, font, vtxt, (cx - 20, cy + radius - 50), color=vcolor)
+    glow_text(surface, font, vtxt, (cx - 20, cy + radius - 50), {"color": vcolor})
 
     lab_w, _ = font_sm.size(label)
     glow_text(surface, font_sm, label, (int(cx - lab_w/2), int(cy + radius - 70)))
@@ -636,7 +662,7 @@ def main():
     )
     args = parser.parse_args()
 
-    pygame.init()
+    pg_init()
     pygame.display.set_caption("Vault-Tec Monitor")
 
     icon_path = args.icon
@@ -649,7 +675,7 @@ def main():
     if icon_path and os.path.exists(icon_path):
         try:
             pygame.display.set_icon(pygame.image.load(icon_path))
-        except Exception as exc:  # pragma: no cover - icon failures are non-critical
+        except pygame.error as exc:  # pragma: no cover - icon failures are non-critical
             print(f"Could not load icon '{icon_path}': {exc}")
 
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -660,7 +686,7 @@ def main():
         font = pygame.font.SysFont(FONT_NAME, FONT_SIZE, bold=True)
         font_sm = pygame.font.SysFont(FONT_NAME, FONT_SIZE_SMALL, bold=True)
         font_lg = pygame.font.SysFont(FONT_NAME, FONT_SIZE_LARGE, bold=True)
-    except Exception:
+    except pygame.error:
         font = pygame.font.SysFont(None, FONT_SIZE, bold=True)
         font_sm = pygame.font.SysFont(None, FONT_SIZE_SMALL, bold=True)
         font_lg = pygame.font.SysFont(None, FONT_SIZE_LARGE, bold=True)
@@ -704,11 +730,11 @@ def main():
 
     while True:
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit(); sys.exit(0)
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                pygame.quit(); sys.exit(0)
-            if state == "start" and event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
+            if event.type == QUIT:
+                pg_quit(); sys.exit(0)
+            if event.type == KEYDOWN and event.key == K_ESCAPE:
+                pg_quit(); sys.exit(0)
+            if state == "start" and event.type == MOUSEBUTTONDOWN and event.button in (1, 3):
                 if start_btn_rect and start_btn_rect.collidepoint(event.pos):
                     state = "dash"
                     need_full_redraw = True
