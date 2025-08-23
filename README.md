@@ -10,7 +10,7 @@ It shows:
 - **Scrolling ticker** (very bottom): recent **Windows System** log events (last hour) via *pywin32*
 
 Optional integrations (no resident GUI apps required):
-- **NVIDIA NVML** (`pynvml`) for GPU utilization and VRAM metrics on GeForce/RTX
+- **Windows GPU performance counters** for Task Manager-style GPU utilization (Windows 10+)
 - **pywin32** for Event Viewer → System log (Windows only)
 
 > If you don’t have sensors or run on macOS/Linux, use `--demo` for simulated data while you perfect the UI.
@@ -53,9 +53,6 @@ Optional integrations (no resident GUI apps required):
 # 2) Install deps
 pip install pygame psutil
 
-# Optional: NVIDIA metrics
-pip install pynvml
-
 # Optional (Windows only): Event Viewer ticker
 pip install pywin32
 
@@ -76,7 +73,7 @@ python pipboy_ui_events_bidir_net_needles.py --demo
 - **OS**: Windows 10/11, macOS, or Linux
 - **Libraries**:
   - Required: `pygame`, `psutil`
-  - Optional: `pynvml` (NVIDIA GPUs), `pywin32` (Windows Event Log ticker)
+  - Optional: `pywin32` (Windows Event Log ticker on Windows)
 
 > Fonts: the app requests `"Courier New"`; if unavailable, Pygame falls back to a system monospace.
 
@@ -86,7 +83,6 @@ python pipboy_ui_events_bidir_net_needles.py --demo
 
 ```bash
 pip install pygame psutil
-pip install pynvml         # optional for NVIDIA GPU load/VRAM
 pip install pywin32        # optional, Windows System log ticker
 ```
 
@@ -94,7 +90,6 @@ Windows PowerShell equivalent:
 
 ```powershell
 py -m pip install pygame psutil
-py -m pip install pynvml
 py -m pip install pywin32
 ```
 
@@ -134,7 +129,7 @@ Planned:
 ## Data Sources
 
 - **CPU Load / RAM** / **Disk usage** / **Network throughput** → `psutil` (cross-platform)
-- **GPU Load / VRAM** (optional) → `pynvml` (NVIDIA)
+- **GPU Load** (Windows) → Windows `GPU Engine` performance counters (PDH)
 - **System Events** (optional, Windows) → `pywin32` (Event Viewer API)
 
 > CPU temperature is intentionally out of scope on Windows without a sensor driver. This project opts to avoid a resident helper app and focuses on stats available from the OS + optional vendor SDKs.
@@ -295,9 +290,9 @@ pip install pyserial
 ```
 Remove/rename any local `serial.py` file/folder.
 
-**GPU numbers are `--`**  
-- Install NVIDIA drivers + `pynvml`.  
-- AMD/Intel GPUs aren’t covered by NVML; the app will just show N/A for GPU load.
+**GPU numbers are `--`**
+- Ensure you're on Windows 10+ with GPU drivers that expose "GPU Engine" performance counters.
+- On unsupported platforms the app will show N/A for GPU load.
 
 **No events in ticker**  
 - Install `pywin32` and run on Windows.  
