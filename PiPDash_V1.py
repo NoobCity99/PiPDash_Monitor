@@ -46,6 +46,8 @@ FPS = 30
 CPU_SAMPLE_SEC = 0.5
 # Throttle disk usage sampling (expensive system calls)
 DISK_SAMPLE_SEC = 5.0
+MEM_SAMPLE_SEC = 0.5
+NET_SAMPLE_SEC = 0.25
 
 # ----------------------------
 # Pip-Boy vibe (colors & style)
@@ -122,6 +124,7 @@ def human_gb(x):
     return f"{x:.1f} GB"
 
 _SCANLINE_SURF = None
+_TEXT_CACHE: dict[tuple[int, str, tuple[int, int, int]], pygame.Surface] = {}
 
 
 def draw_scanlines(surface):
@@ -132,15 +135,24 @@ def draw_scanlines(surface):
             pygame.draw.line(_SCANLINE_SURF, SCANLINE_COLOR, (0, y), (WIDTH, y), 1)
     surface.blit(_SCANLINE_SURF, (0, 0))
 
+def _render_text_cached(text: str, font: pygame.font.Font, color: tuple[int, int, int] = GREEN) -> pygame.Surface:
+    key = (id(font), text, color)
+    surf = _TEXT_CACHE.get(key)
+    if surf is None:
+        surf = font.render(text, True, color)
+        _TEXT_CACHE[key] = surf
+    return surf
+
+
 def glow_text(surface, font, text, pos, color=GREEN, glow=DIM_GREEN, offset=1):
     x, y = pos
     if not text:
         return
     # simple "CRT glow": shadow underlay then main text
-    surf_g = font.render(text, True, glow)
+    surf_g = _render_text_cached(text, font, glow)
     surface.blit(surf_g, (x - offset, y - offset))
     surface.blit(surf_g, (x + offset, y + offset))
-    surface.blit(font.render(text, True, color), pos)
+    surface.blit(_render_text_cached(text, font, color), pos)
 
 
 def load_tinted_logo(path, tint=(0, 255, 70), opacity=220):
@@ -294,7 +306,10 @@ class RealStats:
         self.last_cpu_pct = 0.0
         self.last_cpu_ts = 0.0
         self.last_net = psutil.net_io_counters(pernic=False)
-        self.last_t = time.time()
+        self.last_net_ts = time.time()
+        self.last_net_rates = (0.0, 0.0)
+        self.last_mem = psutil.virtual_memory()
+        self.last_mem_ts = time.time()
         self.last_disk_ts = 0.0
         self.last_disks = []
 
@@ -317,12 +332,15 @@ class RealStats:
 
     def _net(self):
         now = time.time()
-        cur = psutil.net_io_counters(pernic=False)
-        dt = max(1e-6, now - self.last_t)
-        up_mbps = (cur.bytes_sent - self.last_net.bytes_sent) * 8.0 / dt / 1e6
-        down_mbps = (cur.bytes_recv - self.last_net.bytes_recv) * 8.0 / dt / 1e6
-        self.last_net, self.last_t = cur, now
-        return up_mbps, down_mbps
+        if now - self.last_net_ts >= NET_SAMPLE_SEC:
+            cur = psutil.net_io_counters(pernic=False)
+            dt = max(1e-6, now - self.last_net_ts)
+            up_mbps = (cur.bytes_sent - self.last_net.bytes_sent) * 8.0 / dt / 1e6
+            down_mbps = (cur.bytes_recv - self.last_net.bytes_recv) * 8.0 / dt / 1e6
+            self.last_net = cur
+            self.last_net_ts = now
+            self.last_net_rates = (up_mbps, down_mbps)
+        return self.last_net_rates
 
     def snapshot(self):
         now = time.time()
@@ -330,7 +348,10 @@ class RealStats:
             self.last_cpu_pct = psutil.cpu_percent(interval=None)
             self.last_cpu_ts = now
         cpu_pct = self.last_cpu_pct
-        mem = psutil.virtual_memory()
+        if now - self.last_mem_ts >= MEM_SAMPLE_SEC:
+            self.last_mem = psutil.virtual_memory()
+            self.last_mem_ts = now
+        mem = self.last_mem
         mem_used_gb = (mem.total - mem.available) / (1024**3)
         mem_total_gb = mem.total / (1024**3)
         mem_pct = mem.percent
@@ -453,7 +474,7 @@ def draw_bar(surface, font, x1, y1, x2, y2, pct_val, label, right_text):
 
     # text BELOW bar
     glow_text(surface, font, f"{label}", (x1 + 1, y2 + 1))
-    rt_surf = font.render(right_text, True, GREEN)
+    rt_surf = _render_text_cached(right_text, font)
     surface.blit(rt_surf, (x2 - rt_surf.get_width(), y2 + 1))
 
 
@@ -520,14 +541,14 @@ class Ticker:
         self.text = "EVENTS: initializing..."
         self.speed = 80  # pixels per second
         self.x = WIDTH  # start off right edge
-        self.surf = self.font.render(self.text, True, GREEN)
+        self.surf = _render_text_cached(self.text, self.font)
         self.last_update = time.time()
 
     def set_text(self, text: str):
         if not text:
             text = " "
         self.text = text
-        self.surf = self.font.render(self.text, True, GREEN)
+        self.surf = _render_text_cached(self.text, self.font)
         # keep x as-is to avoid jump; if text shorter, loop will catch up
 
     def update(self):
@@ -633,6 +654,11 @@ def main():
     # event log + ticker
     ev_tail = SystemLogTail(lookback_seconds=3600, max_events=60) if WIN32_EVT_OK else None
     ticker = Ticker(font)
+
+    # Pre-cache static text surfaces
+    _render_text_cached("VAULT-TEC // SYSTEMS MONITOR", font_lg)
+    for lab in ("CPU LOAD", "GPU LOAD", "RAM USAGE"):
+        _render_text_cached(lab, font_sm)
 
     gauge_frame = _make_gauge_frame(GAUGE_RADIUS)
 
