@@ -13,20 +13,7 @@ import pygame
 import psutil
 
 # ----------------------------
-# Optional GPU metrics via Windows Performance Counters
-# ----------------------------
-WMI_CLIENT = None
-if sys.platform == "win32":
-    try:
-        import wmi  # type: ignore
-    except Exception:
-        logging.exception("wmi import failed")
-        wmi = None
-else:
-    wmi = None
-
-# ----------------------------
-# Optional PDH access (pywin32)
+# Optional GPU metrics via PDH (Windows Performance Counters)
 # ----------------------------
 if sys.platform == "win32":
     try:
@@ -141,43 +128,6 @@ _SCANLINE_SURF = None
 _TEXT_CACHE: dict[tuple[int, str, tuple[int, int, int]], pygame.Surface] = {}
 
 
-def _ensure_wmi_client():
-    global WMI_CLIENT
-    if WMI_CLIENT is not None or sys.platform != "win32" or wmi is None:
-        return WMI_CLIENT
-    try:
-        WMI_CLIENT = wmi.WMI(namespace=r"root\CIMV2")
-    except Exception:
-        logging.exception("WMI init failed")
-        WMI_CLIENT = None
-    return WMI_CLIENT
-
-
-def _gpu_3d_util_windows() -> float | None:
-    _ensure_wmi_client()
-    if WMI_CLIENT is None:
-        return None
-    try:
-        if not hasattr(WMI_CLIENT, "Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine"):
-            return None
-        engines = WMI_CLIENT.Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine()
-        if not engines:
-            return None
-        total = 0.0
-        found_3d = False
-        for e in engines:
-            name = getattr(e, "Name", "") or ""
-            u = float(getattr(e, "UtilizationPercentage", 0) or 0)
-            if "engtype_3D" in name:
-                total += u
-                found_3d = True
-        if not found_3d:
-            # fallback: sum all engines so we still get a value
-            total = sum(float(getattr(e, "UtilizationPercentage", 0) or 0) for e in engines)
-        return clamp(total, 0.0, 100.0)
-    except Exception:
-        logging.exception("GPU perf counter query failed")
-        return None
 
 
 def _gpu_3d_util_windows_pdh() -> float | None:
@@ -435,43 +385,40 @@ class RealStats:
                 self._gpu_val = alpha * u + (1 - alpha) * self._gpu_val
 
         if win32pdh is not None:
-            query = counter = None
-            try:
-                query = win32pdh.OpenQuery()
-                counter = win32pdh.AddCounter(
-                    query,
-                    r"\\GPU Engine(*engtype_3D)\\Utilization Percentage",
-                    0,
-                )
+            return
+        query = counter = None
+        try:
+            query = win32pdh.OpenQuery()
+            counter = win32pdh.AddCounter(
+                query,
+                r"\\GPU Engine(*engtype_3D)\\Utilization Percentage",
+                0,
+            )
+            win32pdh.CollectQueryData(query)
+            while True:
+                time.sleep(1.0)
                 win32pdh.CollectQueryData(query)
-                while True:
-                    time.sleep(1.0)
-                    win32pdh.CollectQueryData(query)
-                    try:
-                        _, vals = win32pdh.GetFormattedCounterArray(counter, win32pdh.PDH_FMT_DOUBLE)
-                        total = sum(v.get("value", 0.0) for v in vals)
-                        util = clamp(total, 0.0, 100.0)
-                    except Exception:
-                        logging.exception("GPU PDH read failed")
-                        util = None
-                    smooth(util)
-            except Exception:
-                logging.exception("GPU PDH sampler failed")
-            finally:
-                if counter is not None:
-                    try:
-                        win32pdh.RemoveCounter(counter)
-                    except Exception:
-                        pass
-                if query is not None:
-                    try:
-                        win32pdh.CloseQuery(query)
-                    except Exception:
-                        pass
-
-        while True:
-            smooth(_gpu_3d_util_windows())
-            time.sleep(1.0)
+                try:
+                    _, vals = win32pdh.GetFormattedCounterArray(counter, win32pdh.PDH_FMT_DOUBLE)
+                    total = sum(v.get("value", 0.0) for v in vals)
+                    util = clamp(total, 0.0, 100.0)
+                except Exception:
+                    logging.exception("GPU PDH read failed")
+                    util = None
+                smooth(util)
+        except Exception:
+            logging.exception("GPU PDH sampler failed")
+        finally:
+            if counter is not None:
+                try:
+                    win32pdh.RemoveCounter(counter)
+                except Exception:
+                    pass
+            if query is not None:
+                try:
+                    win32pdh.CloseQuery(query)
+                except Exception:
+                    pass
 
     def _gpu(self):
         if self._gpu_val is None:
@@ -483,7 +430,7 @@ class RealStats:
         }
 
     def gpu_data_src(self):
-        return "TM-3D" if WMI_CLIENT is not None and self._gpu_val is not None else "OS"
+        return "TM-3D" if win32pdh is not None and self._gpu_val is not None else "OS"
 
     def _net(self):
         now = time.time()
