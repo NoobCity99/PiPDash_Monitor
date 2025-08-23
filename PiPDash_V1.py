@@ -127,6 +127,23 @@ _SCANLINE_SURF = None
 _TEXT_CACHE: dict[tuple[int, str, tuple[int, int, int]], pygame.Surface] = {}
 
 
+def gauge_rect(center, radius):
+    cx, cy = center
+    return pygame.Rect(cx - radius - 10, cy - radius - 10, radius * 2 + 20, radius * 2 + 40)
+
+
+def bar_rect(x1, y1, x2, y2, font):
+    return pygame.Rect(x1, y1, x2 - x1, (y2 - y1) + font.get_height() + 4)
+
+
+def graph_rect(x, y, w, h):
+    return pygame.Rect(x, y, w, h)
+
+
+def ticker_rect(y):
+    return pygame.Rect(12, y, WIDTH - 24, TICKER_H - 12)
+
+
 def draw_scanlines(surface):
     global _SCANLINE_SURF
     if _SCANLINE_SURF is None:
@@ -519,13 +536,18 @@ def draw_graph(surface, font, x, y, w, h, up_hist, down_hist):
         return x + int(i * (w - 2) / max(1, n - 1))
 
     # plot upload (solid, above midline)
-    if len(up_hist) >= 2:
-        pts = [(x_for_index(i, len(up_hist)), y_for_upload(v)) for i, v in enumerate(up_hist)]
-        pygame.draw.lines(surface, GREEN, False, pts, 2)
+    n_up = len(up_hist)
+    step_up = 2 if n_up >= GRAPH_POINTS else 1
+    if n_up >= 2:
+        pts = [(x_for_index(i, n_up), y_for_upload(up_hist[i])) for i in range(0, n_up, step_up)]
+        if len(pts) >= 2:
+            pygame.draw.lines(surface, GREEN, False, pts, 2)
 
     # plot download (dashed, below midline)
-    if len(down_hist) >= 2:
-        pts = [(x_for_index(i, len(down_hist)), y_for_download(v)) for i, v in enumerate(down_hist)]
+    n_dn = len(down_hist)
+    step_dn = 2 if n_dn >= GRAPH_POINTS else 1
+    if n_dn >= 2:
+        pts = [(x_for_index(i, n_dn), y_for_download(down_hist[i])) for i in range(0, n_dn, step_dn)]
         for i in range(0, len(pts) - 1, 2):
             pygame.draw.line(surface, DIM_GREEN, pts[i], pts[i + 1], 2)
 
@@ -662,6 +684,15 @@ def main():
 
     gauge_frame = _make_gauge_frame(GAUGE_RADIUS)
 
+    background = pygame.Surface((WIDTH, HEIGHT))
+    background.fill(BG_COLOR)
+    draw_scanlines(background)
+    draw_header(background, font_lg, font_sm)
+    logo_x = (WIDTH - logo_main.get_width()) // 2 + LOGO_MAIN_X_OFFSET
+    logo_y = GRAPH_Y - logo_main.get_height() + LOGO_MAIN_Y_OFFSET
+    background.blit(logo_main, (logo_x, logo_y))
+    pygame.draw.line(background, GREEN, (12, GRAPH_Y - 8), (WIDTH - 12, GRAPH_Y - 8), 1)
+
     # histories for graph
     up_hist = deque(maxlen=GRAPH_POINTS)
     dn_hist = deque(maxlen=GRAPH_POINTS)
@@ -669,6 +700,7 @@ def main():
     state = "start"
     start_btn_rect = None
     last_event_poll = 0.0
+    need_full_redraw = True
 
     while True:
         for event in pygame.event.get():
@@ -679,71 +711,79 @@ def main():
             if state == "start" and event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
                 if start_btn_rect and start_btn_rect.collidepoint(event.pos):
                     state = "dash"
+                    need_full_redraw = True
 
         if state == "start":
             screen.fill(BG_COLOR)
             draw_scanlines(screen)
             draw_header(screen, font_lg, font_sm)
             start_btn_rect = start_screen(screen, font_lg, logo_start)
-            pygame.display.flip()
+            pygame.display.update([screen.get_rect()])
             clock.tick(FPS)
             continue
 
-        # ---- Dashboard ----
         snap = provider.snapshot()
 
-        screen.fill(BG_COLOR)
-        draw_scanlines(screen)
-        draw_header(screen, font_lg, font_sm)
+        dirty: list[pygame.Rect] = []
+        if need_full_redraw:
+            screen.blit(background, (0, 0))
+            dirty.append(screen.get_rect())
+            need_full_redraw = False
 
-        # --- Top gauges ---
-        gy = 150  # nudged down for header spacing
+        gy = 150
         centers = [(80, gy), (240, gy), (400, gy)]
 
         cpu_pct = snap.get("cpu_pct")
         gpu_util = snap.get("gpu_util_pct")
         ram_pct = snap.get("ram_pct")
 
+        rect = gauge_rect(centers[0], GAUGE_RADIUS)
+        screen.blit(background, rect, rect)
         draw_gauge(screen, centers[0], GAUGE_RADIUS, cpu_pct, 0, 100, "CPU LOAD", "%", font, font_sm, gauge_frame, hot=(cpu_pct is not None and cpu_pct >= CPU_HOT_PCT))
-        draw_gauge(screen, centers[1], GAUGE_RADIUS, gpu_util, 0, 100, "GPU LOAD", "%", font, font_sm, gauge_frame, hot=(gpu_util is not None and gpu_util >= GPU_HOT_PCT))
-        draw_gauge(screen, centers[2], GAUGE_RADIUS, ram_pct, 0, 100, "RAM USAGE", "%", font, font_sm, gauge_frame, hot=(ram_pct is not None and ram_pct >= RAM_HOT_PCT))
+        dirty.append(rect)
 
-        # --- Middle bars (Disks only; RAM bar removed) ---
+        rect = gauge_rect(centers[1], GAUGE_RADIUS)
+        screen.blit(background, rect, rect)
+        draw_gauge(screen, centers[1], GAUGE_RADIUS, gpu_util, 0, 100, "GPU LOAD", "%", font, font_sm, gauge_frame, hot=(gpu_util is not None and gpu_util >= GPU_HOT_PCT))
+        dirty.append(rect)
+
+        rect = gauge_rect(centers[2], GAUGE_RADIUS)
+        screen.blit(background, rect, rect)
+        draw_gauge(screen, centers[2], GAUGE_RADIUS, ram_pct, 0, 100, "RAM USAGE", "%", font, font_sm, gauge_frame, hot=(ram_pct is not None and ram_pct >= RAM_HOT_PCT))
+        dirty.append(rect)
+
         y = MID_BAND_Y + 10
-        # Disks (up to 6 rows)
         for d in (snap["disks"] or [])[:6]:
             bar_pct = clamp(d["pct"], 0, 100)
+            rect = bar_rect(BAR_LEFT, y, BAR_RIGHT, y + BAR_H, font)
+            screen.blit(background, rect, rect)
             draw_bar(screen, font, BAR_LEFT, y, BAR_RIGHT, y + BAR_H, bar_pct,
                      f"DSK {d['name']} {human_gb(d['used_gb'])}/{human_gb(d['total_gb'])}",
                      f"{bar_pct:.0f}%")
+            dirty.append(rect)
             y += BAR_H + BAR_GAP
 
-        logo_x = (WIDTH - logo_main.get_width()) // 2 + LOGO_MAIN_X_OFFSET  # instructions: adjust LOGO_MAIN_X_OFFSET to move logo horizontally
-        logo_y = GRAPH_Y - logo_main.get_height() + LOGO_MAIN_Y_OFFSET  # instructions: adjust LOGO_MAIN_Y_OFFSET to move logo vertically
-        screen.blit(logo_main, (logo_x, logo_y))
-
-        # divider above graph
-        pygame.draw.line(screen, GREEN, (12, GRAPH_Y - 8), (WIDTH - 12, GRAPH_Y - 8), 1)
-
-        # --- Bottom graph (NET) ---
         up_hist.append(snap["net_up_mbps"])
         dn_hist.append(snap["net_down_mbps"])
+        rect = graph_rect(12, GRAPH_Y, WIDTH - 24, GRAPH_H)
+        screen.blit(background, rect, rect)
         draw_graph(screen, font_sm, 12, GRAPH_Y, WIDTH - 24, GRAPH_H, up_hist, dn_hist)
+        dirty.append(rect)
 
-        # --- Event ticker at very bottom ---
-        # Poll every 5 seconds
         if ev_tail and (time.time() - last_event_poll > 5.0):
             ev_tail.poll()
             ticker.set_text(ev_tail.ticker_text())
             last_event_poll = time.time()
         elif not ev_tail:
-            # Friendly message when pywin32 isn't installed or non-Windows
             ticker.set_text("Install 'pywin32' to enable System log ticker (Windows only).")
 
         ticker.update()
+        rect = ticker_rect(TICKER_Y + 2)
+        screen.blit(background, rect, rect)
         ticker.draw(screen, TICKER_Y + 2)
+        dirty.append(rect)
 
-        pygame.display.flip()
+        pygame.display.update(dirty)
         clock.tick(FPS)
 
 if __name__ == "__main__":
