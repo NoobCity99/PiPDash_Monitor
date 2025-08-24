@@ -335,7 +335,7 @@ class SystemLogTail:
                     self.buffer.appendleft(item)
                     self._last_record = max(self._last_record, recno)
 
-                win32evtlog.CloseEventLog(hlog)
+            win32evtlog.CloseEventLog(hlog)
         except OSError:
             logging.exception("System log poll failed")
 
