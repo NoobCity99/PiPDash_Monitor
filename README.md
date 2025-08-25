@@ -40,7 +40,7 @@ Optional integrations (no resident GUI apps required):
 
 - **Fallout-style UI**: scanlines, glow text, mono font, gauge needles tapered to a point.
 - **Centered network graph**: zero line in the middle; ↑ upload above, ↓ download below.
-- **Event ticker**: pulls **last hour** of important System events (Kernel-Power, Disk/Ntfs, WHEA-Logger, common NIC resets, Service Control Manager) and scrolls them.
+- **Event ticker**: pulls **last 2 hours** of important System events (Errors, Warnings & Critical Events) For Errors and Critical, red alerts display for 1 hour and scrolls them.
 - **Smooth gauges**: optional throttling/EMA smoothing to avoid jitter.
 - **Portrait-first**: defaults to `480×800` window for 5″ screens; easy to resize.
 
