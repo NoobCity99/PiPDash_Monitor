@@ -9,9 +9,6 @@ It shows:
 - **Network graph** (bottom): **upload spikes up**, **download spikes down**, autoscaled
 - **Scrolling ticker** (very bottom): recent **Windows System** log events (last hour) via *pywin32*
 
-Optional integrations (no resident GUI apps required):
-- **NVIDIA NVML** (`pynvml`) for GPU utilization and VRAM metrics on GeForce/RTX
-- **pywin32** for Event Viewer → System log (Windows only)
 
 > If you don’t have sensors or run on macOS/Linux, use `--demo` for simulated data while you perfect the UI.
 
