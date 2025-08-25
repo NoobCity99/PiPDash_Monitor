@@ -5,7 +5,7 @@ a = Analysis(
     ['PiPDash_V1.py'],
     pathex=[],
     binaries=[],
-    datas=[('logo.png', '.'), ('pippy.ico', '.')],
+    datas=[('logo.png', '.'), ('logo_start.png', '.'), ('pippy.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

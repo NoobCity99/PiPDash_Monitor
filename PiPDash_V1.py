@@ -129,7 +129,7 @@ GRAPH_POINTS = WIDTH  # one point per x pixel
 # ----------------------------
 LOGO_START_MAX = 400        # instructions: max width/height of start screen logo
 LOGO_MAIN_MAX = 250         # instructions: max width/height of in-app logo
-LOGO_START_Y_OFFSET = -140  # instructions: vertical offset from screen center for start logo
+LOGO_START_Y_OFFSET = -100   # instructions: vertical offset from screen center for start logo
 LOGO_MAIN_X_OFFSET = 0      # instructions: horizontal offset for in-app logo
 LOGO_MAIN_Y_OFFSET = -35    # instructions: vertical offset from graph for in-app logo
 
@@ -215,7 +215,7 @@ def glow_text(
     surface.blit(_render_text_cached(text, font, color), pos)
 
 
-def load_tinted_logo(path, tint=(0, 255, 70), opacity=220):
+def load_tinted_logo(path, tint=(0, 255, 70), opacity=200):
     """
     Load a white/gray PNG and tint it Fallout-green, preserving antialiasing.
     """
@@ -691,7 +691,7 @@ def start_screen(surface, font_lg, logo):
 
     # footer hint
     font = pygame.font.SysFont(FONT_NAME, FONT_SIZE_SMALL, bold=True) or pygame.font.SysFont(None, FONT_SIZE_SMALL, bold=True)
-    glow_text(surface, font, "Tap screen or click to begin", (WIDTH // 2 - 110, btn_y + btn_h + 14))
+    glow_text(surface, font, "Tap screen or click to begin", (WIDTH // 2.25 - 110, btn_y + btn_h + 14))
 
     return pygame.Rect(btn_x, btn_y, btn_w, btn_h)
 
@@ -709,7 +709,7 @@ def main():
     args = parser.parse_args()
 
     pg_init()
-    pygame.display.set_caption("Vault-Tec Monitor")
+    pygame.display.set_caption("PiPDash System Monitor")
 
     icon_path = args.icon
     if not icon_path:
@@ -737,12 +737,18 @@ def main():
         font_sm = pygame.font.SysFont(None, FONT_SIZE_SMALL, bold=True)
         font_lg = pygame.font.SysFont(None, FONT_SIZE_LARGE, bold=True)
 
-    logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
-    logo_green = load_tinted_logo(logo_path, tint=GREEN)
-    logo_red = load_tinted_logo(logo_path, tint=RED)
-    logo_start = scale_logo(logo_green, LOGO_START_MAX)
+    # separate files for start logo and main logo
+    logo_start_path = os.path.join(os.path.dirname(__file__), "logo_start.png")
+    logo_main_path = os.path.join(os.path.dirname(__file__), "logo.png")
+
+    logo_start_raw = load_tinted_logo(logo_start_path, tint=GREEN)
+    logo_green = load_tinted_logo(logo_main_path, tint=GREEN)
+    logo_red = load_tinted_logo(logo_main_path, tint=RED)
+
+    logo_start = scale_logo(logo_start_raw, LOGO_START_MAX)
     logo_main_green = scale_logo(logo_green, LOGO_MAIN_MAX)
     logo_main_red = scale_logo(logo_red, LOGO_MAIN_MAX)
+
 
     # data provider
     provider = DemoStats() if args.demo else RealStats()
