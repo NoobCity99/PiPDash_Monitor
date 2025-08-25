@@ -24,20 +24,29 @@ from pygame import (
 import psutil
 
 # ----------------------------
-# Optional GPU metrics via NVIDIA NVML
+# Optional GPU metrics via Windows Performance Counters (PDH)
 # ----------------------------
-NVML_OK = False
-try:
-    import pynvml  # type: ignore
-except (ImportError, OSError):
-    pynvml = None  # type: ignore[assignment]
-else:
-    try:
-        pynvml.nvmlInit()
-    except pynvml.NVMLError:  # type: ignore[attr-defined]
-        pynvml = None  # type: ignore[assignment]
-    else:
-        NVML_OK = True
+WIN32_GPU_PDH_OK = False
+_GPU_QUERY = None
+_GPU_COUNTERS = []
+if sys.platform == "win32":
+    try:  # type: ignore[attr-defined]
+        import win32pdh  # type: ignore
+        _GPU_QUERY = win32pdh.OpenQuery()
+        _, instances = win32pdh.EnumObjectItems(None, None, "GPU Engine", win32pdh.PERF_DETAIL_WIZARD)
+        for inst in instances:
+            if "engtype_" not in inst:
+                continue
+            path = win32pdh.MakeCounterPath((None, "GPU Engine", inst, None, -1, "Utilization Percentage"))
+            _GPU_COUNTERS.append(win32pdh.AddCounter(_GPU_QUERY, path))
+        win32pdh.CollectQueryData(_GPU_QUERY)
+        WIN32_GPU_PDH_OK = bool(_GPU_COUNTERS)
+    except Exception:
+        _GPU_QUERY = None
+        _GPU_COUNTERS = []
+        WIN32_GPU_PDH_OK = False
+
+GPU_DATA_SRC = "PDH" if WIN32_GPU_PDH_OK else "OS"
 
 # ----------------------------
 # Optional Windows Event Log (pywin32)
@@ -65,6 +74,9 @@ CPU_SAMPLE_SEC = 0.5
 DISK_SAMPLE_SEC = 5.0
 MEM_SAMPLE_SEC = 0.5
 NET_SAMPLE_SEC = 0.25
+# Throttle GPU sampling and smooth readings to calm the gauge needle
+GPU_SAMPLE_SEC = 0.5
+GPU_SMOOTH_ALPHA = 0.4  # EMA factor (0-1)
 
 # ----------------------------
 # Pip-Boy vibe (colors & style)
@@ -323,7 +335,7 @@ class SystemLogTail:
                     self.buffer.appendleft(item)
                     self._last_record = max(self._last_record, recno)
 
-                win32evtlog.CloseEventLog(hlog)
+            win32evtlog.CloseEventLog(hlog)
         except OSError:
             logging.exception("System log poll failed")
 
@@ -355,23 +367,29 @@ class RealStats:
         self.last_mem_ts = time.time()
         self.last_disk_ts = 0.0
         self.last_disks = []
+        self.last_gpu_util = 0.0
+        self.last_gpu_ts = 0.0
 
     def _gpu(self):
-        if not NVML_OK:
+        if not WIN32_GPU_PDH_OK:
             return None
-        try:
-            h = pynvml.nvmlDeviceGetHandleByIndex(0)
-            util = float(pynvml.nvmlDeviceGetUtilizationRates(h).gpu)
-            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
-            vram_used_gb = mem.used / (1024**3)
-            vram_total_gb = mem.total / (1024**3)
-            return {
-                "util_pct": util,
-                "vram_used_gb": vram_used_gb,
-                "vram_total_gb": vram_total_gb,
-            }
-        except pynvml.NVMLError:  # type: ignore[attr-defined]
-            return None
+        now = time.time()
+        if now - self.last_gpu_ts >= GPU_SAMPLE_SEC:
+            try:
+                win32pdh.CollectQueryData(_GPU_QUERY)
+                total = 0.0
+                for h in _GPU_COUNTERS:
+                    _, val = win32pdh.GetFormattedCounterValue(h, win32pdh.PDH_FMT_DOUBLE)
+                    total += val
+                raw = clamp(total, 0.0, 100.0)
+                if self.last_gpu_ts == 0.0:
+                    self.last_gpu_util = raw
+                else:
+                    self.last_gpu_util += (raw - self.last_gpu_util) * GPU_SMOOTH_ALPHA
+                self.last_gpu_ts = now
+            except Exception:
+                return None
+        return {"util_pct": self.last_gpu_util}
 
     def _net(self):
         now = time.time()
@@ -466,8 +484,8 @@ class DemoStats:
 # ----------------------------
 def draw_header(surface, font_lg, font_sm, data_src_label="OS"):
     glow_text(surface, font_lg, "VAULT-TEC // SYSTEMS MONITOR", (14, 5))
-    # data source badge (NVML/OS)
-    badge = f"DATA SRC: {'NVML' if NVML_OK else data_src_label}"
+    # data source badge (e.g., PDH/OS)
+    badge = f"DATA SRC: {data_src_label}"
     bw, _ = font_sm.size(badge)
     glow_text(surface, font_sm, badge, (WIDTH - bw - 14, 32))
     # thin divider
@@ -713,7 +731,7 @@ def main():
     background = pygame.Surface((WIDTH, HEIGHT))
     background.fill(BG_COLOR)
     draw_scanlines(background)
-    draw_header(background, font_lg, font_sm)
+    draw_header(background, font_lg, font_sm, data_src_label=GPU_DATA_SRC)
     logo_x = (WIDTH - logo_main.get_width()) // 2 + LOGO_MAIN_X_OFFSET
     logo_y = GRAPH_Y - logo_main.get_height() + LOGO_MAIN_Y_OFFSET
     background.blit(logo_main, (logo_x, logo_y))
@@ -742,7 +760,7 @@ def main():
         if state == "start":
             screen.fill(BG_COLOR)
             draw_scanlines(screen)
-            draw_header(screen, font_lg, font_sm)
+            draw_header(screen, font_lg, font_sm, data_src_label=GPU_DATA_SRC)
             start_btn_rect = start_screen(screen, font_lg, logo_start)
             pygame.display.update([screen.get_rect()])
             clock.tick(FPS)
