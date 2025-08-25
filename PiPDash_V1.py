@@ -85,6 +85,7 @@ GREEN = (0, 255, 70)
 DIM_GREEN = (0, 120, 30)
 DARK = (0, 10, 0)
 BLACK = (0, 0, 0)
+RED = (255, 0, 0)
 
 BG_COLOR = BLACK
 SCANLINE_COLOR = (0, 35, 0)
@@ -259,8 +260,8 @@ SEVERITY_MAP = {
 
 
 class SystemLogTail:
-    """Tail Windows 'System' log for last hour, keeping newest events first."""
-    def __init__(self, lookback_seconds=3600, max_events=100, source_patterns=None):
+    """Tail Windows 'System' log for the last 2 hours, keeping newest events first."""
+    def __init__(self, lookback_seconds=7200, max_events=100, source_patterns=None):
         self.lookback_seconds = lookback_seconds
         self.buffer = deque(maxlen=max_events)
         self._last_record = 0
@@ -304,6 +305,8 @@ class SystemLogTail:
 
                     full_id = getattr(ev, "EventID", 0) or 0
                     level = EVENT_TYPES.get(getattr(ev, "EventType", 0), "INFO")
+                    if level not in ("WARNING", "ERROR", "CRITICAL"):
+                        continue
 
                     source = getattr(ev, "SourceName", "") or ""
                     if not self._source_wanted(source):
@@ -330,6 +333,7 @@ class SystemLogTail:
                         "source": source,
                         "event_id": int(event_id),
                         "time": evt_time.strftime("%H:%M:%S") if evt_time else "--:--:--",
+                        "dt": evt_time,
                         "message": msg,
                     }
                     self.buffer.appendleft(item)
@@ -339,17 +343,35 @@ class SystemLogTail:
         except OSError:
             logging.exception("System log poll failed")
 
+        # prune events outside lookback window
+        cutoff_dt = datetime.datetime.now() - datetime.timedelta(seconds=self.lookback_seconds)
+        while self.buffer and self.buffer[-1].get("dt") and self.buffer[-1]["dt"] < cutoff_dt:
+            self.buffer.pop()
+
     def latest(self, n=25):
-        return list(self.buffer)[:n]
+        cutoff_dt = datetime.datetime.now() - datetime.timedelta(seconds=self.lookback_seconds)
+        items = [e for e in self.buffer if not e.get("dt") or e["dt"] >= cutoff_dt]
+        return items[:n]
 
     def ticker_text(self):
-        # Build a compact, looping ticker string from the last hour of events
+        # Build a compact, looping ticker string from recent WARNING/ERROR/CRITICAL events
         parts = []
         for e in self.latest(25):
             parts.append(f"[{e['time']}] {e['level']}: {e['source']}({e['event_id']}) — {e['message']}")
         if not parts:
-            return "EVENTS: No events in the last hour."
+            return (
+                "EVENTS: No serious events in the last hour. Thank your lucky stars the system is stable. "
+                "Also Thank Vault-Tec for protecting you in this time of uncertainty."
+            )
         return "   |   ".join(parts) + "   |   "
+
+    def has_recent_error(self, seconds=3600):
+        cutoff_dt = datetime.datetime.now() - datetime.timedelta(seconds=seconds)
+        for e in self.buffer:
+            dt = e.get("dt")
+            if dt and dt >= cutoff_dt and e["level"] in ("ERROR", "CRITICAL"):
+                return True
+        return False
 
 # ----------------------------
 # Data providers
@@ -602,20 +624,26 @@ def draw_graph(surface, font, x, y, w, h, up_hist, down_hist):
 # Scrolling Ticker
 # ----------------------------
 class Ticker:
-    def __init__(self, font):
+    def __init__(self, font, color=GREEN):
         self.font = font
+        self.color = color
         self.text = "EVENTS: initializing..."
         self.speed = 80  # pixels per second
         self.x = WIDTH  # start off right edge
-        self.surf = _render_text_cached(self.text, self.font)
+        self.surf = _render_text_cached(self.text, self.font, self.color)
         self.last_update = time.time()
 
     def set_text(self, text: str):
         if not text:
             text = " "
         self.text = text
-        self.surf = _render_text_cached(self.text, self.font)
+        self.surf = _render_text_cached(self.text, self.font, self.color)
         # keep x as-is to avoid jump; if text shorter, loop will catch up
+
+    def set_color(self, color):
+        if color != self.color:
+            self.color = color
+            self.surf = _render_text_cached(self.text, self.font, self.color)
 
     def update(self):
         now = time.time()
@@ -628,14 +656,14 @@ class Ticker:
 
     def draw(self, surface, y):
         # draw ticker frame
-        pygame.draw.rect(surface, GREEN, (12, y, WIDTH - 24, TICKER_H - 12), 1)
+        pygame.draw.rect(surface, self.color, (12, y, WIDTH - 24, TICKER_H - 12), 1)
         # clip area
-        clip = pygame.Rect(16, y + 4, WIDTH - 32, TICKER_H - 20)
+        clip = pygame.Rect(16, y + 5, WIDTH - 32, TICKER_H - 20)
         prev = surface.get_clip()
         surface.set_clip(clip)
-        surface.blit(self.surf, (int(self.x), y + 8))
+        surface.blit(self.surf, (int(self.x), y + 4))
         # also draw a second copy to create seamless loop
-        surface.blit(self.surf, (int(self.x) + self.surf.get_width() + 40, y + 8))
+        surface.blit(self.surf, (int(self.x) + self.surf.get_width() + 40, y + 4))
         surface.set_clip(prev)
 
 def start_screen(surface, font_lg, logo):
@@ -710,16 +738,14 @@ def main():
         font_lg = pygame.font.SysFont(None, FONT_SIZE_LARGE, bold=True)
 
     logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
-    logo = load_tinted_logo(logo_path)
-    logo_start = scale_logo(logo, LOGO_START_MAX)
-    logo_main = scale_logo(logo, LOGO_MAIN_MAX)
+    logo_green = load_tinted_logo(logo_path, tint=GREEN)
+    logo_red = load_tinted_logo(logo_path, tint=RED)
+    logo_start = scale_logo(logo_green, LOGO_START_MAX)
+    logo_main_green = scale_logo(logo_green, LOGO_MAIN_MAX)
+    logo_main_red = scale_logo(logo_red, LOGO_MAIN_MAX)
 
     # data provider
     provider = DemoStats() if args.demo else RealStats()
-
-    # event log + ticker
-    ev_tail = SystemLogTail(lookback_seconds=3600, max_events=60) if WIN32_EVT_OK else None
-    ticker = Ticker(font)
 
     # Pre-cache static text surfaces
     _render_text_cached("VAULT-TEC // SYSTEMS MONITOR", font_lg)
@@ -728,14 +754,32 @@ def main():
 
     gauge_frame = _make_gauge_frame(GAUGE_RADIUS)
 
-    background = pygame.Surface((WIDTH, HEIGHT))
-    background.fill(BG_COLOR)
-    draw_scanlines(background)
-    draw_header(background, font_lg, font_sm, data_src_label=GPU_DATA_SRC)
-    logo_x = (WIDTH - logo_main.get_width()) // 2 + LOGO_MAIN_X_OFFSET
-    logo_y = GRAPH_Y - logo_main.get_height() + LOGO_MAIN_Y_OFFSET
-    background.blit(logo_main, (logo_x, logo_y))
-    pygame.draw.line(background, GREEN, (12, GRAPH_Y - 8), (WIDTH - 12, GRAPH_Y - 8), 1)
+    base_bg = pygame.Surface((WIDTH, HEIGHT))
+    base_bg.fill(BG_COLOR)
+    draw_scanlines(base_bg)
+    draw_header(base_bg, font_lg, font_sm, data_src_label=GPU_DATA_SRC)
+    pygame.draw.line(base_bg, GREEN, (12, GRAPH_Y - 8), (WIDTH - 12, GRAPH_Y - 8), 1)
+
+    logo_x = (WIDTH - logo_main_green.get_width()) // 2 + LOGO_MAIN_X_OFFSET
+    logo_y = GRAPH_Y - logo_main_green.get_height() + LOGO_MAIN_Y_OFFSET
+    background_green = base_bg.copy()
+    background_green.blit(logo_main_green, (logo_x, logo_y))
+    background_red = base_bg.copy()
+    background_red.blit(logo_main_red, (logo_x, logo_y))
+
+    # event log + ticker
+    ev_tail = SystemLogTail(lookback_seconds=7200, max_events=60) if WIN32_EVT_OK else None
+    ticker = Ticker(font)
+    if ev_tail:
+        ev_tail.poll()
+        ticker.set_text(ev_tail.ticker_text())
+        severe = ev_tail.has_recent_error()
+    else:
+        ticker.set_text("Install 'pywin32' to enable System log ticker (Windows only).")
+        severe = False
+
+    ticker.set_color(RED if severe else GREEN)
+    background = background_red if severe else background_green
 
     # histories for graph
     up_hist = deque(maxlen=GRAPH_POINTS)
@@ -743,7 +787,7 @@ def main():
 
     state = "start"
     start_btn_rect = None
-    last_event_poll = 0.0
+    last_event_poll = time.time() if ev_tail else 0.0
     need_full_redraw = True
 
     while True:
@@ -817,6 +861,12 @@ def main():
         if ev_tail and (time.time() - last_event_poll > 5.0):
             ev_tail.poll()
             ticker.set_text(ev_tail.ticker_text())
+            severe = ev_tail.has_recent_error()
+            ticker.set_color(RED if severe else GREEN)
+            new_bg = background_red if severe else background_green
+            if background is not new_bg:
+                background = new_bg
+                need_full_redraw = True
             last_event_poll = time.time()
         elif not ev_tail:
             ticker.set_text("Install 'pywin32' to enable System log ticker (Windows only).")
