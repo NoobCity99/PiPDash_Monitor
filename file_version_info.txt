@@ -1,0 +1,19 @@
+# UTF-8
+VSVersionInfo(
+  ffi=FixedFileInfo(filevers=(1,0,0,0), prodvers=(1,0,0,0)),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', 'NoobCity99'),
+        StringStruct('FileDescription', 'PiPDash System Monitor'),
+        StringStruct('FileVersion', '1.3.1'),
+        StringStruct('LegalCopyright', '© 2025 NoobCity99. MIT License'),
+        StringStruct('LegalTrademarks', ''),
+        StringStruct('OriginalFilename', 'PiPDash.exe'),
+        StringStruct('ProductName', 'PiPDash'),
+        StringStruct('ProductVersion', '1.3.1'),
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
