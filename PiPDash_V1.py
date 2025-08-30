@@ -29,7 +29,18 @@ import psutil
 WIN32_GPU_PDH_OK = False
 _GPU_QUERY = None
 _GPU_COUNTERS = []
-if sys.platform == "win32":
+GPU_DATA_SRC = "OS"
+
+
+def _init_gpu_pdh() -> None:
+    """Initialize GPU PDH counters and update globals."""
+    global _GPU_QUERY, _GPU_COUNTERS, WIN32_GPU_PDH_OK, GPU_DATA_SRC, win32pdh
+    WIN32_GPU_PDH_OK = False
+    _GPU_QUERY = None
+    _GPU_COUNTERS = []
+    if sys.platform != "win32":
+        GPU_DATA_SRC = "OS"
+        return
     try:  # type: ignore[attr-defined]
         import win32pdh  # type: ignore
         _GPU_QUERY = win32pdh.OpenQuery()
@@ -45,8 +56,10 @@ if sys.platform == "win32":
         _GPU_QUERY = None
         _GPU_COUNTERS = []
         WIN32_GPU_PDH_OK = False
+    GPU_DATA_SRC = "PDH" if WIN32_GPU_PDH_OK else "OS"
 
-GPU_DATA_SRC = "PDH" if WIN32_GPU_PDH_OK else "OS"
+
+_init_gpu_pdh()
 
 # ----------------------------
 # Optional Windows Event Log (pywin32)
@@ -360,7 +373,7 @@ class SystemLogTail:
             parts.append(f"[{e['time']}] {e['level']}: {e['source']}({e['event_id']}) — {e['message']}")
         if not parts:
             return (
-                "EVENTS: No serious events in the last hour. Thank your lucky stars the system is stable. "
+                "EVENTS: No serious events in the last TWO hours. Thank your lucky stars the system is stable. "
                 "Also Thank Vault-Tec for protecting you in this time of uncertainty."
             )
         return "   |   ".join(parts) + "   |   "
@@ -394,7 +407,7 @@ class RealStats:
 
     def _gpu(self):
         if not WIN32_GPU_PDH_OK:
-            return None
+            return {"util_pct": self.last_gpu_util}
         now = time.time()
         if now - self.last_gpu_ts >= GPU_SAMPLE_SEC:
             try:
@@ -410,7 +423,10 @@ class RealStats:
                     self.last_gpu_util += (raw - self.last_gpu_util) * GPU_SMOOTH_ALPHA
                 self.last_gpu_ts = now
             except Exception:
-                return None
+                logging.exception("GPU PDH query failed")
+                _init_gpu_pdh()
+                if not WIN32_GPU_PDH_OK:
+                    return {"util_pct": self.last_gpu_util}
         return {"util_pct": self.last_gpu_util}
 
     def _net(self):
@@ -689,11 +705,118 @@ def start_screen(surface, font_lg, logo):
     tw, th = font_lg.size(txt)
     glow_text(surface, font_lg, txt, (btn_x + (btn_w - tw) // 2, btn_y + (btn_h - th) // 2))
 
+    # HELP button below START
+    gap = 18
+    help_y = btn_y + btn_h + gap
+    pygame.draw.rect(surface, GREEN, (btn_x, help_y, btn_w, btn_h), width=2)
+    pygame.draw.line(surface, DIM_GREEN, (btn_x + 6, help_y + 6), (btn_x + btn_w - 6, help_y + 6), 2)
+    pygame.draw.line(surface, DIM_GREEN, (btn_x + 6, help_y + btn_h - 6), (btn_x + btn_w - 6, help_y + btn_h - 6), 2)
+    txt2 = "HELP"
+    t2w, t2h = font_lg.size(txt2)
+    glow_text(surface, font_lg, txt2, (btn_x + (btn_w - t2w) // 2, help_y + (btn_h - t2h) // 2))
+
     # footer hint
     font = pygame.font.SysFont(FONT_NAME, FONT_SIZE_SMALL, bold=True) or pygame.font.SysFont(None, FONT_SIZE_SMALL, bold=True)
-    glow_text(surface, font, "Tap screen or click to begin", (WIDTH // 2.25 - 110, btn_y + btn_h + 14))
+    glow_text(surface, font, "Tap screen or click to begin", (WIDTH // 2.25 - 110, help_y + btn_h + 14))
 
-    return pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+    return {
+        "start": pygame.Rect(btn_x, btn_y, btn_w, btn_h),
+        "help": pygame.Rect(btn_x, help_y, btn_w, btn_h),
+    }
+
+# ----------------------------
+# Help screen
+# ----------------------------
+def _load_help_text(filepath: str) -> str:
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            txt = f.read()
+        if not txt.strip():
+            raise ValueError("empty")
+        return txt
+    except Exception:
+        return (
+            "HELP.TXT not found or empty.\n\n"
+            "Create a file named HELP.TXT in the app directory.\n"
+            "Use plain text. Content will wrap and be scrollable.\n\n"
+            "Controls:\n"
+            " - Mouse wheel or touchpad to scroll\n"
+            " - Arrow/PageUp/PageDown/Home/End keys\n"
+            " - Click EXIT to return to Start"
+        )
+
+
+def _wrap_text_to_lines(font: pygame.font.Font, text: str, max_width: int) -> list[str]:
+    lines: list[str] = []
+    for para in text.splitlines():
+        if para.strip() == "":
+            lines.append("")
+            continue
+        words = para.split(" ")
+        cur = ""
+        for w in words:
+            trial = w if not cur else cur + " " + w
+            tw, _ = font.size(trial)
+            if tw <= max_width:
+                cur = trial
+            else:
+                if cur:
+                    lines.append(cur)
+                # very long single word fallback: hard cut
+                while font.size(w)[0] > max_width and len(w) > 1:
+                    cut = max(1, int(len(w) * max_width / (font.size(w)[0] + 1)))
+                    lines.append(w[:cut])
+                    w = w[cut:]
+                cur = w
+        if cur:
+            lines.append(cur)
+    return lines
+
+
+def make_help_surface(font: pygame.font.Font, text: str, width: int) -> pygame.Surface:
+    max_w = max(1, width)
+    lines = _wrap_text_to_lines(font, text, max_w)
+    line_h = font.get_height() + 6
+    surf_h = max(line_h, len(lines) * line_h + 10)
+    surf = pygame.Surface((max_w, surf_h), SRCALPHA)
+    y = 0
+    for ln in lines:
+        glow_text(surf, font, ln, (0, y))
+        y += line_h
+    return surf
+
+
+def draw_help_screen(surface: pygame.Surface, font_lg, font, help_surf: pygame.Surface, scroll_y: int):
+    surface.fill(BG_COLOR)
+    draw_scanlines(surface)
+
+    # header and divider to match app styling
+    draw_header(surface, font_lg, pygame.font.SysFont(FONT_NAME, FONT_SIZE_SMALL, bold=True) or pygame.font.SysFont(None, FONT_SIZE_SMALL, bold=True), data_src_label=GPU_DATA_SRC)
+
+    # EXIT button at top area, below divider
+    btn_w, btn_h = 120, 44
+    btn_x, btn_y = (WIDTH - btn_w) // 2, 66
+    pygame.draw.rect(surface, GREEN, (btn_x, btn_y, btn_w, btn_h), width=2)
+    pygame.draw.line(surface, DIM_GREEN, (btn_x + 6, btn_y + 6), (btn_x + btn_w - 6, btn_y + 6), 2)
+    pygame.draw.line(surface, DIM_GREEN, (btn_x + 6, btn_y + btn_h - 6), (btn_x + btn_w - 6, btn_y + btn_h - 6), 2)
+    txt = "EXIT"
+    tw, th = font_lg.size(txt)
+    glow_text(surface, font_lg, txt, (btn_x + (btn_w - tw) // 2, btn_y + (btn_h - th) // 2))
+
+    # Text viewport with clipping
+    top_pad = btn_y + btn_h + 16
+    viewport = pygame.Rect(16, top_pad, WIDTH - 32, HEIGHT - top_pad - 12)
+    pygame.draw.rect(surface, GREEN, viewport, 1)
+    prev_clip = surface.get_clip()
+    surface.set_clip(viewport.inflate(-6, -6))
+
+    # clamp scroll
+    max_scroll = max(0, help_surf.get_height() - (viewport.height - 12))
+    sy = -max(0, min(scroll_y, max_scroll))
+    surface.blit(help_surf, (viewport.x + 6, viewport.y + 6 + sy))
+
+    surface.set_clip(prev_clip)
+    return pygame.Rect(btn_x, btn_y, btn_w, btn_h), max_scroll
 
 # ----------------------------
 # Main app
@@ -792,7 +915,11 @@ def main():
     dn_hist = deque(maxlen=GRAPH_POINTS)
 
     state = "start"
-    start_btn_rect = None
+    start_btn_rects = None  # dict with 'start' and 'help' rects
+    help_surf = None
+    help_scroll = 0
+    help_exit_rect = None
+    help_max_scroll = 0
     last_event_poll = time.time() if ev_tail else 0.0
     need_full_redraw = True
 
@@ -802,16 +929,72 @@ def main():
                 pg_quit(); sys.exit(0)
             if event.type == KEYDOWN and event.key == K_ESCAPE:
                 pg_quit(); sys.exit(0)
-            if state == "start" and event.type == MOUSEBUTTONDOWN and event.button in (1, 3):
-                if start_btn_rect and start_btn_rect.collidepoint(event.pos):
-                    state = "dash"
-                    need_full_redraw = True
+            if state == "start" and event.type == MOUSEBUTTONDOWN:
+                if event.button in (1, 3):
+                    if start_btn_rects:
+                        if start_btn_rects["start"].collidepoint(event.pos):
+                            state = "dash"
+                            need_full_redraw = True
+                        elif start_btn_rects["help"].collidepoint(event.pos):
+                            # enter help state
+                            help_text_path = os.path.join(os.path.dirname(__file__), "HELP.TXT")
+                            text = _load_help_text(help_text_path)
+                            # width inside viewport: leave 16px margins + 6px inner padding on each side
+                            viewport_inner_w = (WIDTH - 32) - 12
+                            help_surf = make_help_surface(font, text, viewport_inner_w)
+                            help_scroll = 0
+                            state = "help"
+                            need_full_redraw = True
+                # consume other buttons (e.g., wheel) in start state: no-op
+            elif state == "help":
+                # Scroll handling and exit button
+                if event.type == MOUSEBUTTONDOWN:
+                    if event.button in (1, 3):
+                        if help_exit_rect and help_exit_rect.collidepoint(event.pos):
+                            state = "start"
+                            help_exit_rect = None
+                            start_btn_rects = None
+                            continue
+                    # Mouse wheel (older pygame sends 4 up / 5 down)
+                    if event.button == 4:
+                        help_scroll = max(0, help_scroll - 40)
+                    elif event.button == 5:
+                        help_scroll = min(help_max_scroll, help_scroll + 40)
+                elif getattr(pygame, 'MOUSEWHEEL', None) and event.type == pygame.MOUSEWHEEL:  # pygame 2
+                    if event.y > 0:
+                        help_scroll = max(0, help_scroll - 60)
+                    elif event.y < 0:
+                        help_scroll = min(help_max_scroll, help_scroll + 60)
+                elif event.type == KEYDOWN:
+                    if event.key == pygame.K_UP:
+                        help_scroll = max(0, help_scroll - 40)
+                    elif event.key == pygame.K_DOWN:
+                        help_scroll = min(help_max_scroll, help_scroll + 40)
+                    elif event.key == pygame.K_PAGEUP:
+                        help_scroll = max(0, help_scroll - 200)
+                    elif event.key == pygame.K_PAGEDOWN:
+                        help_scroll = min(help_max_scroll, help_scroll + 200)
+                    elif event.key == pygame.K_HOME:
+                        help_scroll = 0
+                    elif event.key == pygame.K_END:
+                        help_scroll = help_max_scroll
 
         if state == "start":
             screen.fill(BG_COLOR)
             draw_scanlines(screen)
             draw_header(screen, font_lg, font_sm, data_src_label=GPU_DATA_SRC)
-            start_btn_rect = start_screen(screen, font_lg, logo_start)
+            start_btn_rects = start_screen(screen, font_lg, logo_start)
+            pygame.display.update([screen.get_rect()])
+            clock.tick(FPS)
+            continue
+        elif state == "help":
+            # Draw help screen and handle scroll/exit
+            if help_surf is None:
+                help_text_path = os.path.join(os.path.dirname(__file__), "HELP.TXT")
+                text = _load_help_text(help_text_path)
+                viewport_inner_w = (WIDTH - 32) - 12
+                help_surf = make_help_surface(font, text, viewport_inner_w)
+            help_exit_rect, help_max_scroll = draw_help_screen(screen, font_lg, font, help_surf, help_scroll)
             pygame.display.update([screen.get_rect()])
             clock.tick(FPS)
             continue

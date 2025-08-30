@@ -1,0 +1,38 @@
+PipDash™ User Operations Pamphlet
+
+Version 1.3.1 – For Internal Vault Use Only
+
+Congratulations, Citizen! You are now the proud operator of the PipDash™ System Monitoring Console — the last word in atomic-age performance dashboards. With PipDash, you’ll never again wonder what your computer is doing while you type that next world-saving memo.
+
+INSTRUCTIONS : 
+1: Open APP and hit "START"
+
+INTERPRETATING DATA
+- Gauges : CPU / GPU / RAM Usage Displayed. 
+
+- Storage Bars :  How much data you're hoarding on your machine. 
+
+- Network Traffic : This moving plot displays network activity, UP spikes is data upload and DOWN spikes is data download. 
+
+- System Event Ticker: This ticker will display any ERROR / WARNING / CRITICAL system log entries within the last 2 hours. Any ERROR or CRITICAL entries within the last 1 hour will enable RED ALERT MODE. To investigate these log entries further, goto your windows EVENT VIEWER and navigate to "WINDOWS LOGS/SYSTEM"
+
+***SAFETY REMINDER***
+1: Do not taunt the PiPDash.
+2: Do not lick the gauges.
+3: Do not attempt to install on a typewriter.
+
+At PipDash™, your system health is our business. And remember:
+“If the gauges are spinning, then so are we — toward a brighter tomorrow!”
+
+
+
+MIT License
+
+Copyright (c) 2025 NoobCity99
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
