@@ -6,7 +6,9 @@ It shows:
 - **Three gauges** (top): **CPU Load**, **GPU Load**, **RAM Usage** (0–100%)
 - **Disk usage bars** (middle): one per drive
 - **Network graph** (bottom): **upload spikes up**, **download spikes down**, autoscaled
-- **Scrolling ticker** (very bottom): recent **Windows System** log events (last 2 hours) via *pywin32* Any **ERROR or CRITICAL** system events in the last 1 hour will activate _RED ALERT_ mode. 
+- **Scrolling ticker** (very bottom): recent **Windows System** log events (last 2 hours) via *pywin32* Any **ERROR or CRITICAL** system events in the last 1 hour will activate _RED ALERT_ mode.
+
+_**ANY RELEASE IS A DOWNLOADABLE SELF CONTAINED .EXE APPLICATION, NO CODING OR ASSEMBLY REQUIRED**_
 
 <img width="964" height="834" alt="image" src="https://github.com/user-attachments/assets/31f3d8c6-3226-4a5b-9dfc-34bb4986f567" />
 
@@ -43,7 +45,7 @@ It shows:
 ---
 
 ## Quick Start
-
+IF DOWNLOADING SOURCE CODE
 ```bash
 # 1) Install Python 3.10+
 # 2) Install deps
