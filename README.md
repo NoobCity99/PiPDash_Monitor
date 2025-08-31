@@ -9,8 +9,8 @@ It shows:
 - **Network graph** (bottom): **upload spikes up**, **download spikes down**, autoscaled
 - **Scrolling ticker** (very bottom): recent **Windows System** log events (last hour) via *pywin32*
 
+<img width="964" height="834" alt="image" src="https://github.com/user-attachments/assets/31f3d8c6-3226-4a5b-9dfc-34bb4986f567" />
 
-> If you don’t have sensors or run on macOS/Linux, use `--demo` for simulated data while you perfect the UI.
 
 ---
 
