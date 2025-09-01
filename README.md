@@ -1,4 +1,4 @@
-# Vault-Tec Pip-Boy System Monitor / Hardware Monitor
+# Vault-Tec PiPDash System Monitor / Hardware Monitor
 
 A retro-styled, green-on-black **system dashboard** / inspired by the Fallout Pip-Boy.  
 Runs on Windows/Designed for a **5″ portrait display (480×800)** and just as happy on a laptop.
